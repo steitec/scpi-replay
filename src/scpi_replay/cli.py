@@ -22,12 +22,12 @@ DEFAULT_PORT = 5025
 def parse_address(text: str, default_port: int = DEFAULT_PORT) -> tuple[str, int]:
     """Parse ``HOST``, ``HOST:PORT`` or ``[IPV6]:PORT``; a bad address is a usage error (exit 2)."""
     try:
-        return _parse_address(text, default_port)
+        return split_address(text, default_port)
     except ValueError as e:
         _build_parser().error(str(e))
 
 
-def _parse_address(text: str, default_port: int) -> tuple[str, int]:
+def split_address(text: str, default_port: int = DEFAULT_PORT) -> tuple[str, int]:
     host, port = text, default_port
     if text.startswith("["):
         host, sep, rest = text[1:].partition("]")

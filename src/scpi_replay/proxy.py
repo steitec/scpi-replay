@@ -68,6 +68,10 @@ class Recorder(TcpServer):
         self._note = note
         self._cassette: CassetteWriter | None = None
 
+    @property
+    def resource(self) -> str:
+        return f"TCPIP::{self.host}::{self.port}::SOCKET"
+
     async def _open(self) -> None:
         await super()._open()
         try:  # only after a successful bind, so a failed start leaves the file alone
