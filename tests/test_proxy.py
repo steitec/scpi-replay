@@ -4,6 +4,7 @@ import time
 import pytest
 from helpers import EchoInstrument
 
+from scpi_replay._server import TcpServer
 from scpi_replay.cassette import Cassette
 from scpi_replay.proxy import Recorder
 
@@ -169,16 +170,27 @@ def test_cassette_errors_do_not_break_forwarding(setup, monkeypatch):
     assert bytes(inst.received) == b"A?\nB?\n"
 
 
-def test_stop_records_unfinished_data(setup):
-    inst, rec, path = setup
-    with connect(rec.port) as s:
-        s.sendall(b"A?\n")
-        assert read_until(s) == b"ans:A?\n"
-        s.sendall(b"PART")
+class Sink(TcpServer):
+    """Instrument that only collects the raw bytes it receives."""
+
+    def __init__(self) -> None:
+        super().__init__("127.0.0.1", 0, name="sink")
+        self.received = bytearray()
+
+    async def _serve_client(self, reader, writer) -> None:
+        while chunk := await reader.read(4096):
+            self.received += chunk
+
+
+def test_stop_records_unfinished_data(tmp_path):
+    path = tmp_path / "c.jsonl"
+    with Sink() as inst, Recorder(("127.0.0.1", inst.port), path) as rec, connect(rec.port) as s:
+        s.sendall(b"A?\nPART")
         deadline = time.monotonic() + T
-        while bytes(inst.received) != b"A?\n" and time.monotonic() < deadline:
+        while bytes(inst.received) != b"A?\nPART" and time.monotonic() < deadline:
             time.sleep(0.01)
-        time.sleep(0.2)  # let the proxy forward PART
+        # The proxy logs a chunk in the same loop step that forwards it, so the
+        # data is recorded before stop() can run on that loop.
         rec.stop()
     cas = Cassette.load(path)
     sends = [m.raw for m in cas.items if getattr(m, "dir", None) == "send"]

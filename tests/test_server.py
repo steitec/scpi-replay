@@ -164,16 +164,16 @@ def test_accepts_path_string_and_cassette(tmp_path):
 
 
 def test_timing_recorded_and_cap(tmp_path):
-    rows = [(1.0, 1, "send", "READ?"), (1.2, 1, "recv", "1")]
-    p = make(tmp_path / "c", rows)
+    p = make(tmp_path / "c", [(1.0, 1, "send", "READ?"), (1.2, 1, "recv", "1")])
     with ReplayServer(p, timing="recorded") as srv, connect(srv) as s:
         t0 = time.monotonic()
         assert ask(s, b"READ?") == b"1\n"
         assert time.monotonic() - t0 >= 0.18
+    p = make(tmp_path / "d", [(1.0, 1, "send", "READ?"), (2.0, 1, "recv", "1")])
     with ReplayServer(p, timing="recorded", max_delay=0.05) as srv, connect(srv) as s:
         t0 = time.monotonic()
         assert ask(s, b"READ?") == b"1\n"
-        assert 0.04 <= time.monotonic() - t0 < 0.19
+        assert 0.04 <= time.monotonic() - t0 < 0.6
 
 
 def test_unknown_conn_raises(tmp_path):

@@ -126,11 +126,13 @@ def test_closed_port_raises():
         check(Cassette({}, []), ("127.0.0.1", port))
 
 
-GAP = [(0.0, "send", "X?"), (0.01, "recv", "a"), (0.31, "send", "X?"), (0.32, "recv", "a")]
+def gap(seconds):
+    return [(0.0, "send", "X?"), (0.01, "recv", "a"),
+            (0.01 + seconds, "send", "X?"), (0.02 + seconds, "recv", "a")]
 
 
-def timed(tmp_path, **kw):
-    p = make(tmp_path / "c", GAP)
+def timed(tmp_path, rows, **kw):
+    p = make(tmp_path / "c", rows)
     with ReplayServer(p) as srv:
         t0 = time.monotonic()
         check(p, tgt(srv), timeout=2.0, **kw)
@@ -138,15 +140,15 @@ def timed(tmp_path, **kw):
 
 
 def test_timing_recorded(tmp_path):
-    assert timed(tmp_path, timing="recorded") >= 0.28
+    assert timed(tmp_path, gap(0.3), timing="recorded") >= 0.28
 
 
 def test_timing_max_gap_caps(tmp_path):
-    assert timed(tmp_path, timing="recorded", max_gap=0.05) < 0.25
+    assert timed(tmp_path, gap(1.0), timing="recorded", max_gap=0.05) < 0.6
 
 
 def test_timing_fast(tmp_path):
-    assert timed(tmp_path, timing="fast") < 0.25
+    assert timed(tmp_path, gap(1.0), timing="fast") < 0.6
 
 
 def test_binary_send_byte_exact(tmp_path):
@@ -254,11 +256,11 @@ class Scripted:
 
 
 def test_late_answer_is_not_taken_for_the_next_query(tmp_path):
-    # *OPC? was answered at once when recorded (wait = 0.5 s); now it takes 0.8 s.
-    # The late "1" arrives during the recorded 0.6 s gap before FETC? and is discarded.
+    # *OPC? was answered at once when recorded (wait = 0.52 s); now it takes 0.9 s.
+    # The late "1" arrives during the recorded 1 s gap before FETC? and is discarded.
     p = make(tmp_path / "c", [(0.0, "send", "*OPC?"), (0.01, "recv", "1"),
-                              (0.61, "send", "FETC?"), (0.62, "recv", "+1.0E+00")])
-    with Scripted({"*OPC?": (0.8, ["1"]), "FETC?": (0, ["+1.0E+00"])}) as srv:
+                              (1.01, "send", "FETC?"), (1.02, "recv", "+1.0E+00")])
+    with Scripted({"*OPC?": (0.9, ["1"]), "FETC?": (0, ["+1.0E+00"])}) as srv:
         rep = check(p, tgt(srv), timing="recorded", timeout=0.1)
     assert [(r.exchange.send.text, r.verdict.status, r.verdict.reason) for r in rep.results] == [
         ("*OPC?", "FAIL", "no response"), ("FETC?", "PASS", "")]

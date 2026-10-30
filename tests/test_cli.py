@@ -171,8 +171,9 @@ def test_serve_strict_summary(tmp_path):
     try:
         line = c.first_line()
         assert line.endswith("(strict)")
-        query(port_of(line, " on "), b"WRONG\n")
-        time.sleep(0.3)  # let the server register the mismatch before the stop
+        with socket.create_connection(("127.0.0.1", port_of(line, " on ")), timeout=5) as s:
+            s.sendall(b"WRONG\n")
+            assert s.recv(10) == b""  # closed after the mismatch was registered
         _, err = c.finish(signal.SIGINT)
     finally:
         c.close()
