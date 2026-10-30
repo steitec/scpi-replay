@@ -30,7 +30,7 @@ def test_block_after_header_in_one_message():
     assert Framer().feed(b"DATA #13xyz\n") == [Frame(b"DATA #13xyz", True, b"\n")]
 
 
-def test_block_without_trailing_newline_then_next_message():
+def test_flush_block_without_trailing_newline():
     f = Framer()
     assert f.feed(b"#13xyz") == []
     assert f.flush() == Frame(b"#13xyz", True, b"")
@@ -51,3 +51,28 @@ def test_flush_returns_leftover():
     assert f.feed(b"*RST") == []
     assert f.flush() == Frame(b"*RST", False, b"")
     assert f.flush() is None
+
+
+def test_bare_hash_digit_does_not_stall():
+    assert Framer().feed(b"FOO #5\n") == [Frame(b"FOO #5", False, b"\n")]
+    assert Framer().feed(b"#2\n") == [Frame(b"#2", False, b"\n")]
+    assert Framer().feed(b"#H\n") == [Frame(b"#H", False, b"\n")]
+
+
+def test_partial_length_digits_wait():
+    f = Framer()
+    assert f.feed(b"#31") == []
+    assert f.feed(b"02" + b"x" * 102) == []
+    assert f.feed(b"\n")[0].binary
+
+
+def test_stray_quote_does_not_swallow_newlines():
+    assert Framer().feed(b"ERR \"can't\nREAD?\n") == [
+        Frame(b"ERR \"can't", False, b"\n"),
+        Frame(b"READ?", False, b"\n"),
+    ]
+
+
+def test_quote_state_does_not_leak():
+    frames = Framer().feed(b"X 'abc\n#13xyz\n")
+    assert frames == [Frame(b"X 'abc", False, b"\n"), Frame(b"#13xyz", True, b"\n")]

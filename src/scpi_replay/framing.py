@@ -16,7 +16,8 @@ class Framer:
     """Incremental message framer.
 
     A message ends at a newline outside a quoted string or binary block.
-    Definite blocks (``#<n><len><payload>``) are skipped by length, so
+    A newline outside a block payload always ends the message; quotes only
+    suppress block detection and reset at each message end. Definite blocks (``#<n><len><payload>``) are skipped by length, so
     payload bytes may contain newlines; ``#0`` blocks run to the next newline.
     State is kept across ``feed`` calls and consumed bytes are not rescanned.
     """
@@ -35,24 +36,41 @@ class Framer:
         self._indefinite = False
         self._block_end = 0
 
+    def _emit_line(self, frames: list[Frame]) -> None:
+        """Close the message ending at the newline at ``_pos``."""
+        buf = self._buf
+        end = self._pos
+        term = b"\n"
+        if end > self._block_end and end > 0 and buf[end - 1] == 0x0D:
+            end -= 1
+            term = b"\r\n"
+        frames.append(Frame(bytes(buf[:end]), self._binary, term))
+        del buf[: self._pos + 1]
+        self._pos = 0
+        self._reset()
+
     def feed(self, chunk: bytes) -> list[Frame]:
         self._buf += chunk
         buf = self._buf
         frames: list[Frame] = []
         while self._pos < len(buf):
             c = buf[self._pos]
+            if c == 0x0A:
+                self._emit_line(frames)
+                continue
             if self._indefinite:
-                pass
-            elif self._quote:
+                self._pos += 1
+                continue
+            if self._quote:
                 if c == self._quote:
                     self._quote = 0
                 self._pos += 1
                 continue
-            elif c in b"\"'":
+            if c in b"\"'":
                 self._quote = c
                 self._pos += 1
                 continue
-            elif c == 0x23:  # "#"
+            if c == 0x23:  # "#"
                 if self._pos + 1 >= len(buf):
                     break  # need the next byte
                 d = buf[self._pos + 1]
@@ -63,12 +81,12 @@ class Framer:
                 if 0x31 <= d <= 0x39:
                     n = d - 0x30
                     start = self._pos + 2 + n
-                    if len(buf) < start:
-                        break  # need all length digits
                     digits = bytes(buf[self._pos + 2 : start])
-                    if not digits.isdigit():
+                    if digits and not digits.isdigit():
                         self._pos += 1  # not a block header
                         continue
+                    if len(digits) < n:
+                        break  # only digits so far: wait for the rest
                     self._binary = True
                     self._block_end = start + int(digits)
                     # Skip the payload without scanning it (it may be incomplete).
@@ -76,22 +94,14 @@ class Framer:
                     continue
                 self._pos += 1
                 continue
-            if c == 0x0A:
-                end = self._pos
-                term = b"\n"
-                if end > self._block_end and end > 0 and buf[end - 1] == 0x0D:
-                    end -= 1
-                    term = b"\r\n"
-                frames.append(Frame(bytes(buf[:end]), self._binary, term))
-                del buf[: self._pos + 1]
-                self._pos = 0
-                self._reset()
-                continue
             self._pos += 1
         return frames
 
     def flush(self) -> Frame | None:
-        """Return leftover bytes at stream end as a frame with empty terminator."""
+        """Return leftover bytes at stream end as a frame with empty terminator.
+
+        The frame is binary if a block header was seen, else text.
+        """
         if not self._buf:
             return None
         frame = Frame(bytes(self._buf), self._binary, b"")
