@@ -53,7 +53,6 @@ def test_unknown_query_fails_teardown(bench):
     result = run(bench, '''
         def test_it(scpi_cassette):
             server = scpi_cassette("c.scpi.jsonl")
-            server.resource
             import socket
             with socket.create_connection(("127.0.0.1", server.port)) as s:
                 s.sendall(b"NOPE?\\n")
@@ -98,6 +97,31 @@ def test_record_without_target_is_usage_error(bench):
         def test_it(scpi_cassette):
             scpi_cassette("r.scpi.jsonl")
     ''', "--scpi-record")
-    assert result.ret != 0
-    result.stdout.fnmatch_lines(["*--scpi-target*"])
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*--scpi-record needs a target*--scpi-target*"])
+    assert "Traceback" not in result.stdout.str()
+    assert "UsageError" not in result.stdout.str()
     assert not (bench.path / "r.scpi.jsonl").exists()
+
+
+def test_failing_stop_does_not_skip_the_others(bench):
+    result = run(bench, '''
+        SERVERS = []
+
+        def test_it(scpi_cassette):
+            a = scpi_cassette("c.scpi.jsonl")
+            b = scpi_cassette("c.scpi.jsonl")
+            real = a.stop
+
+            def stop():
+                real()
+                raise RuntimeError("stop failed")
+
+            a.stop = stop
+            SERVERS.extend([a, b])
+
+        def test_both_stopped():
+            assert [s._loop for s in SERVERS] == [None, None]
+    ''')
+    result.assert_outcomes(passed=2, errors=1)
+    result.stdout.fnmatch_lines(["*RuntimeError: stop failed*"])

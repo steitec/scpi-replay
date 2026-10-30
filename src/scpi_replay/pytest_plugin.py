@@ -9,7 +9,8 @@ reached.
 
 With ``--scpi-record`` the factory records instead: it returns a
 :class:`Recorder` that proxies ``target=`` (or ``--scpi-target HOST[:PORT]``)
-and writes the cassette to ``path``.
+and writes the cassette to ``path``. Recording truncates ``path``, so give
+every test its own cassette.
 """
 
 from __future__ import annotations
@@ -44,12 +45,13 @@ class CassettePool:
         if target is None:
             target = self.config.getoption("--scpi-target")
         if target is None:
-            raise pytest.UsageError("--scpi-record needs a target: pass target=... or --scpi-target HOST[:PORT]")
+            pytest.fail("scpi-replay: --scpi-record needs a target: pass target=... or "
+                        "--scpi-target HOST[:PORT]", pytrace=False)
         if isinstance(target, str):
             try:
                 return split_address(target)
             except ValueError as e:
-                raise pytest.UsageError(f"scpi-replay target: {e}") from None
+                pytest.fail(f"scpi-replay target: {e}", pytrace=False)
         return target
 
     def start(self, path, *, mode="lookup", conn=None, require_all=True, target=None):
@@ -74,8 +76,14 @@ class CassettePool:
     def finish(self) -> None:
         """Stop every server, then fail the test if a replay server found problems."""
         servers, self.servers = self.servers, []
+        errors: list[BaseException] = []
         for server, _ in servers:
-            server.stop()
+            try:
+                server.stop()
+            except Exception as e:  # stop the others anyway
+                errors.append(e)
+        if errors:
+            raise errors[0]
         lines: list[str] = []
         for server, require_all in servers:
             if not isinstance(server, ReplayServer):
@@ -89,6 +97,10 @@ class CassettePool:
 
 @pytest.fixture
 def scpi_cassette(request: pytest.FixtureRequest):
+    """Factory that replays (or with ``--scpi-record`` records) a cassette for this test.
+
+    Recording overwrites the cassette: use one cassette file per test.
+    """
     pool = CassettePool(request.config)
     yield pool.start
     pool.finish()
