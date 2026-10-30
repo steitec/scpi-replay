@@ -203,7 +203,9 @@ Then one line per message or event, in the order they appeared on the wire:
 | `event` | `open` or `close`; a close has `by`: `client`, `target`, or `recorder` (the recorder was stopped with Ctrl+C while a client was connected) |
 | `warning` | a parse problem; the bytes were forwarded anyway |
 
-A `\n` outside a binary block always ends a message. `\r\n` and `\n` both
+A `\n` outside a binary block always ends a message. A binary block starts
+with `#` at the start of a message or after a space, tab or comma, so a `#` inside
+a word (`SER AB#15`) is plain text. `\r\n` and `\n` both
 count as terminators.
 
 **Exchanges.** When loading, messages are grouped per `send`. A message is a

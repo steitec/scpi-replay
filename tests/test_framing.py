@@ -76,3 +76,14 @@ def test_stray_quote_does_not_swallow_newlines():
 def test_quote_state_does_not_leak():
     frames = Framer().feed(b"X 'abc\n#13xyz\n")
     assert frames == [Frame(b"X 'abc", False, b"\n"), Frame(b"#13xyz", True, b"\n")]
+
+
+def test_hash_digit_inside_a_word_is_not_a_block():
+    f = Framer()
+    assert f.feed(b"SER AB#15\nNEXT?\n") == [Frame(b"SER AB#15", False, b"\n"),
+                                             Frame(b"NEXT?", False, b"\n")]
+
+
+def test_block_after_comma_or_tab():
+    assert Framer().feed(b"DATA 1,#13a\nb\n") == [Frame(b"DATA 1,#13a\nb", True, b"\n")]
+    assert Framer().feed(b"DATA\t#12ab\n") == [Frame(b"DATA\t#12ab", True, b"\n")]

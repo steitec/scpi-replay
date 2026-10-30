@@ -17,7 +17,9 @@ class Framer:
 
     A message ends at a newline outside a quoted string or binary block.
     A newline outside a block payload always ends the message; quotes only
-    suppress block detection and reset at each message end. Definite blocks (``#<n><len><payload>``) are skipped by length, so
+    suppress block detection and reset at each message end. A block starts with
+    ``#`` at the start of a message or after a space, tab or comma. Definite
+    blocks (``#<n><len><payload>``) are skipped by length, so
     payload bytes may contain newlines; ``#0`` blocks run to the next newline.
     State is kept across ``feed`` calls and consumed bytes are not rescanned.
     """
@@ -71,6 +73,9 @@ class Framer:
                 self._pos += 1
                 continue
             if c == 0x23:  # "#"
+                if self._pos > 0 and buf[self._pos - 1] not in b" \t,":
+                    self._pos += 1  # inside a word ("AB#15"): not a block start
+                    continue
                 if self._pos + 1 >= len(buf):
                     break  # need the next byte
                 d = buf[self._pos + 1]
