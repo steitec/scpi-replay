@@ -118,10 +118,10 @@ class _Lost(Exception):
 
 
 class _Link:
-    """Blocking connection with a framer; leftover frames carry over between reads.
+    """Blocking connection with a framer.
 
-    Known 0.1 limitation: a response arriving after its timeout is read as the
-    answer to the next query.
+    Before every send, answers that are already there (late or extra ones) are
+    discarded, so they are never compared with the next query's answer.
     """
 
     def __init__(self, sock: socket.socket, timeout: float) -> None:
@@ -130,9 +130,27 @@ class _Link:
         self.framer = Framer()
         self.pending: deque[Frame] = deque()
 
-    def send(self, data: bytes) -> None:
+    def discard_stale(self) -> None:
+        """Drop pending frames and any bytes already waiting in the socket."""
+        self.pending.clear()
+        self.framer = Framer()
+        self.sock.settimeout(0.0)
         try:
-            self.sock.settimeout(self.timeout)  # read() leaves a tiny timeout behind
+            while True:
+                try:
+                    chunk = self.sock.recv(65536)
+                except (BlockingIOError, InterruptedError):
+                    return
+                except OSError as e:
+                    raise _Lost from e
+                if not chunk:
+                    raise _Lost
+        finally:
+            self.sock.settimeout(self.timeout)
+
+    def send(self, data: bytes) -> None:
+        self.discard_stale()
+        try:
             self.sock.sendall(data)
         except OSError as e:
             raise _Lost from e
@@ -159,6 +177,13 @@ class _Link:
                 break
             self.pending.extend(self.framer.feed(chunk))
         return self.pending.popleft().data
+
+
+def _wait_for(ex: Exchange, timeout: float) -> float:
+    """How long to wait for the answer: at least ``timeout``, longer for slow recorded answers."""
+    if ex.response is None:
+        return timeout
+    return max(timeout, 2 * ex.latency + 0.5)
 
 
 def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
@@ -196,7 +221,7 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
                 sent = True
                 if not ex.query:
                     continue
-                actual = link.read(timeout)
+                actual = link.read(_wait_for(ex, timeout))
             except _Lost:
                 report.aborted = f"connection lost at {ex.index:03d} {ex.send.text}"
                 for e in exchanges[pos:]:

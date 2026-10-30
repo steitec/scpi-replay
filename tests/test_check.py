@@ -220,3 +220,64 @@ def test_text_ignored_separator(tmp_path):
     assert "IGNORED 001 *IDN?" in lines
     assert "FAIL  002 READ?  expected +1.2E+01, got +1.3E+01" in lines
     assert "PASS  004 VOLT?" in lines
+
+
+class Scripted:
+    """Answers line by line from ``answers`` = {command: (delay, reply lines)}."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.s = socket.socket()
+        self.s.bind(("127.0.0.1", 0))
+        self.s.listen()
+        self.port = self.s.getsockname()[1]
+        self.t = threading.Thread(target=self.run, daemon=True)
+        self.t.start()
+
+    def run(self):
+        c, _ = self.s.accept()
+        with c, c.makefile("rb") as f:
+            try:
+                for line in f:
+                    delay, replies = self.answers.get(line.strip().decode(), (0, []))
+                    time.sleep(delay)
+                    c.sendall(b"".join(r.encode() + b"\n" for r in replies))
+            except OSError:  # the checker has gone away
+                pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.s.close()
+        self.t.join(5)
+
+
+def test_late_answer_is_not_taken_for_the_next_query(tmp_path):
+    # *OPC? was answered at once when recorded (wait = 0.5 s); now it takes 0.8 s.
+    # The late "1" arrives during the recorded 0.6 s gap before FETC? and is discarded.
+    p = make(tmp_path / "c", [(0.0, "send", "*OPC?"), (0.01, "recv", "1"),
+                              (0.61, "send", "FETC?"), (0.62, "recv", "+1.0E+00")])
+    with Scripted({"*OPC?": (0.8, ["1"]), "FETC?": (0, ["+1.0E+00"])}) as srv:
+        rep = check(p, tgt(srv), timing="recorded", timeout=0.1)
+    assert [(r.exchange.send.text, r.verdict.status, r.verdict.reason) for r in rep.results] == [
+        ("*OPC?", "FAIL", "no response"), ("FETC?", "PASS", "")]
+    assert rep.results[1].actual == b"+1.0E+00"
+
+
+def test_extra_answer_line_is_not_taken_for_the_next_query(tmp_path):
+    p = make(tmp_path / "c", [(0.0, "send", "A?"), (0.01, "recv", "a"),
+                              (0.2, "send", "B?"), (0.21, "recv", "b")])
+    with Scripted({"A?": (0, ["a", "stray"]), "B?": (0.05, ["b"])}) as srv:
+        rep = check(p, tgt(srv), timing="recorded", timeout=2.0)
+    assert [r.verdict.status for r in rep.results] == ["PASS", "PASS"], rep.text()
+    assert rep.results[1].actual == b"b"
+
+
+def test_recorded_latency_longer_than_timeout_is_waited_for(tmp_path):
+    p = make(tmp_path / "c", [(0.0, "send", "*OPC?"), (0.4, "recv", "1"),
+                              (0.5, "send", "FETC?"), (0.51, "recv", "+1.0E+00")])
+    with Scripted({"*OPC?": (0.4, ["1"]), "FETC?": (0, ["+1.0E+00"])}) as srv:
+        rep = check(p, tgt(srv), timing="fast", timeout=0.1)
+    assert rep.ok, rep.text()
+    assert [r.actual for r in rep.results] == [b"1", b"+1.0E+00"]

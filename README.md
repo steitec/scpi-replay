@@ -122,7 +122,11 @@ compares it with the recording. Failures are listed first.
 - `--timing recorded` (default) waits the recorded gap before each command, capped
   by `--max-gap` (default 10 s), because real instruments need settle time after
   `OUTP ON` or `INIT`. `--timing fast` sends right away, good for simulators.
-- `--timeout` (default 5 s) is the wait for one answer. No answer counts as FAIL.
+- `--timeout` (default 5 s) is the shortest wait for one answer. If the
+  recorded answer took longer, `check` waits up to twice the recorded time plus
+  0.5 s, so a slow `*OPC?` is not cut off. No answer counts as FAIL. Answers
+  that arrive late, or extra lines after an answer, are discarded before the
+  next command is sent, never compared with the next query.
   If the connection is lost, the run stops and every remaining query counts as FAIL.
 - `--junit OUT.xml` writes JUnit XML (one test case per query, named like
   `003 READ?`), `--json OUT.json` the same data for scripts. test-protocol can
@@ -285,6 +289,10 @@ The servers run on a background thread with their own event loop.
 - Arguments are matched as written (only whitespace is collapsed), so
   `OUTP on` does not match `OUTP ON`. Optional nodes such as `[SOURce:]` are
   not resolved.
+- `check` cannot tell a late answer from the next one: an answer that arrives
+  after its wait has ended but after the next query was sent is taken as the
+  answer to that query. Answers that are already there before a command is sent
+  are discarded. Raise `--timeout` for slow instruments.
 - No SRQ, status-byte reads or device clear (these are not part of a raw socket).
 - No cassette editing tools, no GUI.
 - No redaction: a cassette contains everything that was sent, including serial
