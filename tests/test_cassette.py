@@ -158,3 +158,26 @@ def test_bad_header_raises(tmp_path):
                  '{"t":0,"conn":1,"event":"open"}\n')
     with pytest.raises(CassetteError, match="line 2"):
         Cassette.load(p)
+
+
+@pytest.mark.parametrize("last", [False, True])
+def test_unicode_line_separators_roundtrip(tmp_path, last):
+    p = tmp_path / "a.jsonl"
+    odd = "a\u2028b\u2029c\x85d".encode()
+    msgs = [(1, "recv", F(odd))]
+    if not last:
+        msgs.append((1, "send", F("X")))
+    write(p, *msgs)
+    c = Cassette.load(p)
+    assert c.warnings == []
+    assert c.items[0].raw == odd
+
+
+def test_write_after_close_is_noop(tmp_path):
+    p = tmp_path / "a.jsonl"
+    w = CassetteWriter(p, target="t")
+    w.close()
+    w.message(1, "send", F("A"))
+    w.event(1, "open")
+    w.close()
+    assert Cassette.load(p).items == []

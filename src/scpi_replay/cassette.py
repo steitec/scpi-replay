@@ -75,6 +75,8 @@ class CassetteWriter:
     def _line(self, obj: dict[str, Any]) -> None:
         data = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
         with self._lock:
+            if self._f.closed:
+                return  # late delivery during shutdown
             self._f.write(data)
             self._f.flush()
 
@@ -169,7 +171,7 @@ class Cassette:
             text = Path(path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
             raise CassetteError(f"cannot read {path}: {e}") from None
-        numbered = [(n, s) for n, s in enumerate(text.splitlines(), 1) if s.strip()]
+        numbered = [(n, s.rstrip("\r")) for n, s in enumerate(text.split("\n"), 1) if s.strip()]
         if not numbered:
             raise CassetteError("line 1: empty cassette (no header)")
         header: dict[str, Any] | None = None
