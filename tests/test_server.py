@@ -1,4 +1,5 @@
 import json
+import re
 import socket
 import time
 
@@ -179,7 +180,7 @@ def test_timing_recorded_and_cap(tmp_path):
 def test_unknown_conn_raises(tmp_path):
     from scpi_replay.cassette import Cassette
     p = make(tmp_path / "c", READS)
-    with pytest.raises(ValueError, match=rf"no connection 9 in {p} \(has: 1\)"):
+    with pytest.raises(ValueError, match=re.escape(f"no connection 9 in {p} (has: 1)")):
         ReplayServer(p, conn=9)
     with pytest.raises(ValueError, match=r"no connection 9 in <memory>"):
         ReplayServer(Cassette.load(p), conn=9)

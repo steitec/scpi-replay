@@ -1,4 +1,5 @@
 import json
+import re
 import socket
 import threading
 import time
@@ -287,7 +288,7 @@ def test_recorded_latency_longer_than_timeout_is_waited_for(tmp_path):
 
 def test_unknown_conn_raises_before_connecting(tmp_path):
     p = make(tmp_path / "c", BASE)
-    with pytest.raises(ValueError, match=rf"no connection 99 in {p} \(has: 1\)"):
+    with pytest.raises(ValueError, match=re.escape(f"no connection 99 in {p} (has: 1)")):
         check(p, ("127.0.0.1", 1), conn=99)
 
 
