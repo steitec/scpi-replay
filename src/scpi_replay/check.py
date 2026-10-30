@@ -1,0 +1,204 @@
+"""``check``: replay a cassette's commands against a live target and compare."""
+
+from __future__ import annotations
+
+import json
+import socket
+import time
+import xml.etree.ElementTree as ET
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
+
+from .cassette import Cassette, Exchange
+from .compare import Rule, Verdict, compare, find_rule, load_rules
+from .framing import Frame, Framer
+
+
+class CheckError(Exception):
+    """The target cannot be reached."""
+
+
+@dataclass
+class Result:
+    exchange: Exchange
+    actual: bytes | None
+    verdict: Verdict
+
+    @property
+    def label(self) -> str:
+        return f"{self.exchange.index:03d} {self.exchange.send.text}"
+
+
+def _show(raw: bytes, binary: bool) -> str:
+    return f"<binary {len(raw)} bytes>" if binary else raw.decode("utf-8", "replace")
+
+
+@dataclass
+class Report:
+    cassette: str
+    target: str
+    results: list[Result] = field(default_factory=list)
+    aborted: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.aborted is None and not any(r.verdict.status == "FAIL" for r in self.results)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        c = {"PASS": 0, "FAIL": 0, "IGNORED": 0}
+        for r in self.results:
+            c[r.verdict.status] += 1
+        return c
+
+    def text(self, color: bool = False) -> str:
+        paint = {"FAIL": "31", "PASS": "32", "IGNORED": "33"}
+        ordered = ([r for r in self.results if r.verdict.status == "FAIL"]
+                   + [r for r in self.results if r.verdict.status != "FAIL"])
+        lines = []
+        for r in ordered:
+            st = r.verdict.status
+            tag = f"\x1b[{paint[st]}m{st}\x1b[0m" if color else st
+            line = f"{tag}{' ' * (6 - len(st))}{r.label}"
+            if r.verdict.reason:
+                line += f"  {r.verdict.reason}"
+            lines.append(line)
+        if self.aborted:
+            lines.append(f"aborted: {self.aborted}")
+        c = self.counts
+        lines.append(f"{len(self.results)} queries: {c['PASS']} passed, {c['FAIL']} failed, {c['IGNORED']} ignored")
+        return "\n".join(lines)
+
+    def _recorded(self, r: Result) -> str:
+        m = r.exchange.response
+        return "(none)" if m is None else _show(m.raw, m.binary)
+
+    def _actual(self, r: Result) -> str:
+        if r.actual is None:
+            return "(none)"
+        return _show(r.actual, r.actual.startswith(b"#"))
+
+    def to_junit(self) -> str:
+        c = self.counts
+        suite = ET.Element("testsuite", name=self.cassette, tests=str(len(self.results)),
+                           failures=str(c["FAIL"]), skipped=str(c["IGNORED"]))
+        for r in self.results:
+            case = ET.SubElement(suite, "testcase", name=r.label, classname="scpi-replay")
+            st = r.verdict.status
+            if st == "FAIL":
+                f = ET.SubElement(case, "failure", message=r.verdict.reason)
+                f.text = f"recorded: {self._recorded(r)}\nactual: {self._actual(r)}"
+            elif st == "IGNORED":
+                ET.SubElement(case, "skipped")
+        if self.aborted:
+            ET.SubElement(suite, "system-err").text = f"aborted: {self.aborted}"
+        ET.indent(suite)
+        return ET.tostring(suite, encoding="unicode", xml_declaration=False)
+
+    def to_json(self) -> str:
+        results = []
+        for r in self.results:
+            results.append({
+                "index": r.exchange.index,
+                "command": r.exchange.send.text,
+                "status": r.verdict.status,
+                "reason": r.verdict.reason,
+                "expected": None if r.exchange.response is None else self._recorded(r),
+                "actual": None if r.actual is None else self._actual(r),
+            })
+        return json.dumps({"cassette": self.cassette, "target": self.target, "ok": self.ok,
+                           "aborted": self.aborted, "counts": self.counts, "results": results},
+                          indent=2, ensure_ascii=False)
+
+
+class _Lost(Exception):
+    pass
+
+
+class _Link:
+    """Blocking connection with a framer; leftover frames carry over between reads.
+
+    Known 0.1 limitation: a response arriving after its timeout is read as the
+    answer to the next query.
+    """
+
+    def __init__(self, sock: socket.socket) -> None:
+        self.sock = sock
+        self.framer = Framer()
+        self.pending: deque[Frame] = deque()
+
+    def send(self, data: bytes) -> None:
+        try:
+            self.sock.sendall(data)
+        except OSError as e:
+            raise _Lost from e
+
+    def read(self, timeout: float) -> bytes | None:
+        """Next response, or None on timeout. Raises _Lost on EOF/reset."""
+        deadline = time.monotonic() + timeout
+        while not self.pending:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return None
+            self.sock.settimeout(left)
+            try:
+                chunk = self.sock.recv(65536)
+            except socket.timeout:
+                return None
+            except OSError as e:
+                raise _Lost from e
+            if not chunk:
+                tail = self.framer.flush()
+                if tail is None:
+                    raise _Lost
+                self.pending.append(tail)
+                break
+            self.pending.extend(self.framer.feed(chunk))
+        return self.pending.popleft().data
+
+
+def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
+          rules: list[Rule] | str | Path | None = None,
+          timing: Literal["recorded", "fast"] = "recorded", max_gap: float = 10.0,
+          timeout: float = 5.0, conn: int | None = None) -> Report:
+    """Send every recorded command to ``target`` and compare the query responses."""
+    if isinstance(cassette, Cassette):
+        name = "<memory>"
+    else:
+        name = str(cassette)
+        cassette = Cassette.load(cassette)
+    if rules is None:
+        rule_list: list[Rule] = []
+    elif isinstance(rules, list):
+        rule_list = rules
+    else:
+        rule_list = load_rules(rules)
+    host, port = target
+    try:
+        sock = socket.create_connection(target, timeout=timeout)
+    except OSError as e:
+        raise CheckError(f"cannot connect to {host}:{port}: {e}") from None
+    report = Report(name, f"{host}:{port}")
+    exchanges = cassette.exchanges(conn)
+    with sock:
+        link = _Link(sock)
+        for pos, ex in enumerate(exchanges):
+            if timing == "recorded" and ex.gap > 0:
+                time.sleep(min(ex.gap, max_gap))
+            rule = find_rule(rule_list, ex.send.text) if ex.query else None
+            try:
+                link.send(ex.send.raw + (ex.send.term or b"\n"))
+                if not ex.query:
+                    continue
+                actual = link.read(timeout)
+            except _Lost:
+                report.aborted = f"connection lost at {ex.index:03d} {ex.send.text}"
+                rest = [e for e in exchanges[pos:] if e.query]
+                for e in rest:
+                    report.results.append(Result(e, None, Verdict("FAIL", "not sent: connection lost")))
+                break
+            assert rule is not None
+            report.results.append(Result(ex, actual, compare(ex.response, actual, rule)))
+    return report
