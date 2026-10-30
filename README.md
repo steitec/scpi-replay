@@ -216,9 +216,11 @@ answer", which is valid (real instruments do that on errors). A `recv` that does
 not follow a query is "unsolicited": `show` prints it, `serve` and `check` ignore it.
 
 **Command normalisation** (matching in `serve` and in rule patterns): trim,
-collapse whitespace, uppercase the header, and reduce every header node to its
-SCPI short form. `MEASure:VOLTage:DC? 10` and `meas:volt:dc?  10` both become
-`MEAS:VOLT:DC? 10`.
+uppercase the header, reduce every header node to its SCPI short form, and put
+a single space between header and arguments. The arguments themselves are kept
+as written, including spaces inside them. `MEASure:VOLTage:DC? 10` and
+`meas:volt:dc?  10` both become `MEAS:VOLT:DC? 10`, but `CONF:VOLT 10,1` and
+`CONF:VOLT 10, 1` stay different.
 
 ## Rules
 
@@ -228,7 +230,8 @@ same text after trimming. Binary blocks must match byte for byte, and a
 missing answer on one side must be missing on the other.
 
 A TOML file adapts that per command. Rules are tried in order, the first match
-wins; `match` is a glob on the normalised command.
+wins. This is [`examples/rules.toml`](examples/rules.toml), used for the
+outputs above:
 
 ```toml
 [[rule]]
@@ -237,9 +240,17 @@ compare = "ignore"      # serial number and firmware differ from unit to unit
 
 [[rule]]
 match = "READ?"
-abs = 0.05              # |actual - recorded| <= abs + rel * |recorded|
-rel = 0.001
+abs = 0.05              # readings are noisy: |actual - recorded| <= 0.05
 ```
+
+`match` is a shell-style glob (Python `fnmatch`, itself normalised like a
+command) on the normalised command, including its arguments. So `?` in a
+pattern is a wildcard for one character (it also matches the `?` of a query),
+and a pattern needs a trailing `*` to cover commands with arguments:
+`MEAS:VOLT:DC?` does not match `MEAS:VOLT:DC? 10`, `MEAS:VOLT:DC?*` does.
+
+Numeric tolerance: `|actual - recorded| <= abs + rel * |recorded|`, with `abs`
+and `rel` both 0 by default, for example `rel = 0.001` for 0.1 %.
 
 | `compare` | meaning |
 | --- | --- |
@@ -248,8 +259,6 @@ rel = 0.001
 | `exact` | the answer text must be identical |
 | `regex` | the actual answer must match `pattern` (the recording is only shown) |
 | `length` | only the length must match, for binary or long answers |
-
-[`examples/rules.toml`](examples/rules.toml) fits the noisy simulated DMM.
 
 ## pytest plugin
 
@@ -270,6 +279,8 @@ def test_reads_voltage(scpi_cassette):
 - `pytest --scpi-record --scpi-target 192.168.1.50` makes the fixture record
   instead of replay, writing the cassette to the given path. That refreshes
   cassettes when the hardware is at hand. `target=` in the call works too.
+  Recording overwrites the file, so use one cassette per test: two tests that
+  record to the same path leave only the second one's traffic.
 
 A complete example is in [`examples/test_with_cassette.py`](examples/test_with_cassette.py).
 
@@ -302,8 +313,8 @@ cassette.
   serial (RS-232 / USB-CDC) recording yet.
 - Replay is a lookup, not a simulation: the cassette does not model instrument
   state. Use [scpi-sim](https://github.com/steitec/scpi-sim) when state matters.
-- Arguments are matched as written (only whitespace is collapsed), so
-  `OUTP on` does not match `OUTP ON`. Optional nodes such as `[SOURce:]` are
+- Arguments are matched as written (only the space after the header is
+  normalised), so `OUTP on` does not match `OUTP ON`. Optional nodes such as `[SOURce:]` are
   not resolved.
 - `check` cannot tell a late answer from the next one: an answer that arrives
   after its wait has ended but after the next query was sent is taken as the
