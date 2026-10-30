@@ -287,3 +287,27 @@ def test_unknown_conn_raises_before_connecting(tmp_path):
     p = make(tmp_path / "c", BASE)
     with pytest.raises(ValueError, match=rf"no connection 99 in {p} \(has: 1\)"):
         check(p, ("127.0.0.1", 1), conn=99)
+
+
+def test_interrupt_keeps_partial_report(tmp_path, monkeypatch):
+    import sys
+    check_mod = sys.modules["scpi_replay.check"]
+    from scpi_replay.check import CheckInterrupted
+    real = check_mod._Link.read
+    calls = []
+
+    def read(self, timeout):
+        calls.append(1)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        return real(self, timeout)
+
+    monkeypatch.setattr(check_mod._Link, "read", read)
+    p = make(tmp_path / "c", BASE)
+    with ReplayServer(p) as srv:
+        with pytest.raises(CheckInterrupted) as e:
+            run(p, srv)
+    assert isinstance(e.value, KeyboardInterrupt)
+    rep = e.value.report
+    assert rep.aborted == "interrupted" and not rep.ok
+    assert [r.exchange.send.text for r in rep.results] == ["*IDN?"]

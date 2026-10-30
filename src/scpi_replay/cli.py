@@ -10,7 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from .cassette import Cassette
-from .check import CheckError, check
+from .check import CheckError, CheckInterrupted, check
 from .proxy import Recorder
 from .server import ReplayServer
 from .show import transcript
@@ -212,9 +212,16 @@ def _serve(args) -> int:
 
 
 def _check(args) -> int:
+    _install_sigterm()
     try:
-        report = check(args.file, args.target, rules=args.rules, timing=args.timing,
-                       max_gap=args.max_gap, timeout=args.timeout, conn=args.conn)
+        try:
+            report = check(args.file, args.target, rules=args.rules, timing=args.timing,
+                           max_gap=args.max_gap, timeout=args.timeout, conn=args.conn)
+        except CheckInterrupted as e:  # report what was checked so far, exit 1
+            report = e.report
+        except KeyboardInterrupt:  # before the connection was made
+            print("scpi-replay: interrupted", file=sys.stderr)
+            return 130
         color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
         _say(report.text(color=color).rstrip("\n"))
         if args.junit:

@@ -135,7 +135,14 @@ compares it with the recording. Failures are listed first.
   `003 READ?`), `--json OUT.json` the same data for scripts. test-protocol can
   read the JUnit file as it is.
 - `--conn N` checks one recorded connection only.
-- Exit codes: 0 all passed, 1 at least one FAIL, 2 usage error, cannot connect, or bad cassette.
+- Ctrl+C stops the run and prints the queries checked so far with
+  `aborted: interrupted` (the JUnit and JSON files are written too); the exit
+  code is 1. Before the connection is made, Ctrl+C exits with 130.
+- `check` sends every recorded command to the target, including `OUTP ON` or
+  `*RST`. Point it only at an instrument where that is safe, and note that a run
+  that is stopped or loses the connection can leave an output switched on.
+- Exit codes: 0 all passed, 1 at least one FAIL (or interrupted), 2 usage error
+  (including a `--conn` that is not in the cassette), cannot connect, or bad cassette.
 
 ### `serve`: let the cassette be the instrument
 

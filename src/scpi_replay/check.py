@@ -20,6 +20,14 @@ class CheckError(Exception):
     """The target cannot be reached."""
 
 
+class CheckInterrupted(KeyboardInterrupt):
+    """Ctrl+C during :func:`check`; ``report`` holds the results so far (aborted: "interrupted")."""
+
+    def __init__(self, report: Report) -> None:
+        super().__init__("interrupted")
+        self.report = report
+
+
 @dataclass
 class Result:
     exchange: Exchange
@@ -192,8 +200,8 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
           timeout: float = 5.0, conn: int | None = None) -> Report:
     """Send every recorded command to ``target`` and compare the query responses.
 
-    Raises :class:`CheckError` if the target cannot be reached and ValueError
-    for an unknown ``conn``.
+    Raises :class:`CheckError` if the target cannot be reached, ValueError
+    for an unknown ``conn`` and :class:`CheckInterrupted` on Ctrl+C.
     """
     if isinstance(cassette, Cassette):
         name = "<memory>"
@@ -216,26 +224,30 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
     report = Report(name, f"{host}:{port}")
     with sock:
         link = _Link(sock, timeout)
-        for pos, ex in enumerate(exchanges):
-            if timing == "recorded" and ex.gap > 0:
-                time.sleep(min(ex.gap, max_gap))
-            rule = find_rule(rule_list, ex.send.text) if ex.query else None
-            sent = False
-            try:
-                link.send(ex.send.raw + (ex.send.term or b"\n"))
-                sent = True
-                if not ex.query:
-                    continue
-                actual = link.read(_wait_for(ex, timeout))
-            except _Lost:
-                report.aborted = f"connection lost at {ex.index:03d} {ex.send.text}"
-                for e in exchanges[pos:]:
-                    if not e.query:
+        try:
+            for pos, ex in enumerate(exchanges):
+                if timing == "recorded" and ex.gap > 0:
+                    time.sleep(min(ex.gap, max_gap))
+                rule = find_rule(rule_list, ex.send.text) if ex.query else None
+                sent = False
+                try:
+                    link.send(ex.send.raw + (ex.send.term or b"\n"))
+                    sent = True
+                    if not ex.query:
                         continue
-                    reason = ("connection lost before response" if e is ex and sent
-                              else "not sent: connection lost")
-                    report.results.append(Result(e, None, Verdict("FAIL", reason)))
-                break
-            assert rule is not None
-            report.results.append(Result(ex, actual, compare(ex.response, actual, rule)))
+                    actual = link.read(_wait_for(ex, timeout))
+                except _Lost:
+                    report.aborted = f"connection lost at {ex.index:03d} {ex.send.text}"
+                    for e in exchanges[pos:]:
+                        if not e.query:
+                            continue
+                        reason = ("connection lost before response" if e is ex and sent
+                                  else "not sent: connection lost")
+                        report.results.append(Result(e, None, Verdict("FAIL", reason)))
+                    break
+                assert rule is not None
+                report.results.append(Result(ex, actual, compare(ex.response, actual, rule)))
+        except KeyboardInterrupt:
+            report.aborted = "interrupted"
+            raise CheckInterrupted(report) from None
     return report

@@ -332,3 +332,30 @@ def test_serve_logs_unknown_query_while_running(tmp_path):
             assert lines.get(timeout=10) == "scpi-replay: unknown query: FOO?\n"
     finally:
         c.close()
+
+
+@POSIX_ONLY
+def test_check_interrupted_prints_partial_report(tmp_path):
+    cas = make(tmp_path / "c.jsonl")
+    with socket.socket() as mute:  # accepts, never answers
+        mute.bind(("127.0.0.1", 0))
+        mute.listen()
+        mute.settimeout(10)
+        p = subprocess.Popen([sys.executable, "-m", "scpi_replay", "check", str(cas), "--target",
+                              f"127.0.0.1:{mute.getsockname()[1]}", "--timing", "fast",
+                              "--timeout", "30"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            conn, _ = mute.accept()
+            with conn:
+                conn.settimeout(10)
+                assert conn.recv(10) == b"X?\n"  # check is now waiting for the answer
+                p.send_signal(signal.SIGINT)
+                out, err = p.communicate(timeout=10)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+    assert p.returncode == 1
+    assert out.splitlines() == ["aborted: interrupted", "0 queries: 0 passed, 0 failed, 0 ignored"]
+    assert err == ""
