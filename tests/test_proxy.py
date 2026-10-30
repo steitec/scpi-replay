@@ -198,3 +198,27 @@ def test_failed_start_leaves_file_alone(tmp_path):
             rec.start()
     assert path.read_text() == "PRECIOUS"
     rec.stop()
+
+
+def test_target_refused_is_logged(tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead = probe.getsockname()[1]
+    seen = []
+    with Recorder(("127.0.0.1", dead), tmp_path / "c.jsonl", log=seen.append) as rec:
+        with connect(rec.port) as s:
+            assert s.recv(10) == b""
+        deadline = time.monotonic() + T
+        while not seen and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert len(seen) == 1 and seen[0].startswith("connection to target refused")
+    assert rec.opened == 0 and rec.connections == 1
+
+
+def test_opened_counts_target_connections(setup):
+    inst, rec, path = setup
+    with connect(rec.port) as s:
+        s.sendall(b"A?\n")
+        read_until(s)
+    settle(path)
+    assert rec.opened == 1

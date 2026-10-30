@@ -153,7 +153,8 @@ def _record(args) -> int:
     else:
         listen = ("127.0.0.1", 0 if _is_loopback(host) else DEFAULT_PORT)
     rec = Recorder(args.target, args.output, host=listen[0], port=listen[1],
-                   note=args.note, once=args.once)
+                   note=args.note, once=args.once,
+                   log=lambda text: _say(f"scpi-replay: warning: {text}", sys.stderr))
     try:
         bound = rec.start()
     except OSError as e:
@@ -178,13 +179,15 @@ def _record(args) -> int:
         rec.stop()
     if not args.once:
         _say(f"recorded {rec.connections} connection(s) -> {args.output}")
-    return 0
+        return 0
+    return 0 if rec.opened else 1  # --once: nothing was recorded from the target
 
 
 def _serve(args) -> int:
     try:
         srv = ReplayServer(args.file, host=args.host, port=args.port, mode=args.mode,
-                           conn=args.conn, timing=args.timing, max_delay=args.max_delay)
+                           conn=args.conn, timing=args.timing, max_delay=args.max_delay,
+                           log=lambda text: _say(f"scpi-replay: {text}", sys.stderr))
         bound = srv.start()
     except (ValueError, OSError) as e:  # ValueError includes CassetteError
         print(f"scpi-replay: error: {e}", file=sys.stderr)
@@ -204,9 +207,7 @@ def _serve(args) -> int:
               f"{sum(p.startswith('expected') for p in problems)} mismatches"
     if args.mode == "strict":
         summary += f", {len(srv.unreached())} recorded exchanges never reached"
-    _say(summary, sys.stderr)
-    for line in problems:
-        _say(line, sys.stderr)
+    _say(summary, sys.stderr)  # the problems themselves were logged as they happened
     return 1 if problems else 0
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from scpi_replay._server import TcpServer
 from scpi_replay.cassette import Cassette, Exchange
@@ -19,12 +19,14 @@ class ReplayServer(TcpServer):
     ``lookup``: queries are matched by normalised command; repeats get the
     recorded responses in order, then the last one again. Unknown queries get
     no answer. ``strict``: the client must send exactly the recorded commands
-    in order; the first mismatch closes the connection.
+    in order; the first mismatch closes the connection. ``log`` (optional) is
+    called with each problem (unknown query, mismatch) as it happens.
     """
 
     def __init__(self, cassette: Cassette | str | Path, *, host: str = "127.0.0.1", port: int = 0,
                  mode: Literal["lookup", "strict"] = "lookup", conn: int | None = None,
-                 timing: Literal["fast", "recorded"] = "fast", max_delay: float = 5.0):
+                 timing: Literal["fast", "recorded"] = "fast", max_delay: float = 5.0,
+                 log: Callable[[str], None] | None = None):
         super().__init__(host, port, name="replay-server")
         if isinstance(cassette, Cassette):
             name = "<memory>"
@@ -35,6 +37,7 @@ class ReplayServer(TcpServer):
         self.mode = mode
         self.timing = timing
         self.max_delay = max_delay
+        self.log = log
         self._exchanges = cassette.exchanges(conn)
         self._by_cmd: dict[str, list[Exchange]] = {}
         for ex in self._exchanges:
@@ -69,6 +72,8 @@ class ReplayServer(TcpServer):
     def _problem(self, text: str) -> None:
         with self._lock:
             self._problems.append(text)
+        if self.log is not None:
+            self.log(text)
 
     async def _reply(self, writer: asyncio.StreamWriter, ex: Exchange) -> None:
         resp = ex.response

@@ -6,6 +6,7 @@ import asyncio
 import sys
 import threading
 from pathlib import Path
+from typing import Callable
 
 from ._server import TcpServer
 from .cassette import CassetteWriter
@@ -55,14 +56,22 @@ class _Conn:
 
 
 class Recorder(TcpServer):
-    """Listen for clients, forward each to ``target`` and record the traffic."""
+    """Listen for clients, forward each to ``target`` and record the traffic.
+
+    ``log`` (optional) is called with the text of each warning as it is
+    recorded, for example when the target refuses a connection.
+    ``connections`` counts clients, ``opened`` the connections to the target.
+    """
 
     def __init__(self, target: tuple[str, int], path: str | Path, *, host: str = "127.0.0.1",
-                 port: int = 0, note: str = "", once: bool = False):
+                 port: int = 0, note: str = "", once: bool = False,
+                 log: Callable[[str], None] | None = None):
         super().__init__(host, port, name="scpi-replay-record")
         self.target = target
         self.once = once
+        self.log = log
         self.connections = 0
+        self.opened = 0
         self.finished = threading.Event()
         self._path = path
         self._note = note
@@ -88,6 +97,11 @@ class Recorder(TcpServer):
             if self._cassette is not None:
                 self._cassette.close()
 
+    def _warn(self, conn: _Conn, text: str) -> None:
+        conn.event("warning", text=text)
+        if self.log is not None:
+            self.log(text)
+
     async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections += 1
         conn = _Conn(self._cassette, self.connections)
@@ -97,12 +111,13 @@ class Recorder(TcpServer):
                 t_reader, t_writer = await asyncio.wait_for(
                     asyncio.open_connection(*self.target), CONNECT_TIMEOUT)
             except asyncio.TimeoutError:
-                conn.event("warning", text=f"connection to target timed out after {CONNECT_TIMEOUT:g}s")
+                self._warn(conn, f"connection to target timed out after {CONNECT_TIMEOUT:g}s")
                 return
             except OSError as exc:
                 kind = "refused" if isinstance(exc, ConnectionRefusedError) else "failed"
-                conn.event("warning", text=f"connection to target {kind}: {exc}")
+                self._warn(conn, f"connection to target {kind}: {exc}")
                 return
+            self.opened += 1
             conn.event("open")
 
             async def pump(src, dst, direction: str, side: str) -> None:

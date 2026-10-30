@@ -183,3 +183,16 @@ def test_unknown_conn_raises(tmp_path):
         ReplayServer(p, conn=9)
     with pytest.raises(ValueError, match=r"no connection 9 in <memory>"):
         ReplayServer(Cassette.load(p), conn=9)
+
+
+def test_problems_are_logged_as_they_happen(tmp_path):
+    seen = []
+    with ReplayServer(make(tmp_path / "c", READS), log=seen.append) as srv, connect(srv) as s:
+        s.sendall(b"NOPE?\n")
+        assert ask(s, b"READ?") == b"1\n"  # NOPE? was handled before READ?
+        assert seen == ["unknown query: NOPE?"]
+    with ReplayServer(make(tmp_path / "c", READS), mode="strict", log=seen.append) as srv:
+        with connect(srv) as s:
+            s.sendall(b"WRONG\n")
+            assert s.recv(10) == b""
+    assert seen[1:] == ["expected READ?, got WRON"]  # normalised to the short form

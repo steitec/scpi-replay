@@ -269,6 +269,7 @@ def test_serve_option_wiring(monkeypatch, capsys):
     rc = main(["serve", "F", "--host", "0.0.0.0", "--port", "9", "--mode", "strict", "--conn", "2",
                "--timing", "recorded", "--max-delay", "1.5"])
     assert rc == 0
+    assert callable(FakeServer.seen.pop("log"))
     assert FakeServer.seen == {"cassette": "F", "host": "0.0.0.0", "port": 9, "mode": "strict",
                                "conn": 2, "timing": "recorded", "max_delay": 1.5}
     assert "serving F on 0.0.0.0:1234 (strict)" in capsys.readouterr().out
@@ -301,3 +302,33 @@ def test_unknown_conn_is_usage_error(tmp_path, capsys, monkeypatch, cmd):
     cas = make(tmp_path / "c.jsonl")
     assert main([cmd[0], str(cas), *cmd[1:], "--conn", "99"]) == 2
     assert capsys.readouterr().err == f"scpi-replay: error: no connection 99 in {cas} (has: 1)\n"
+
+
+def test_record_once_refused_target_warns_and_exits_1(tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        dead = probe.getsockname()[1]
+    out = tmp_path / "r.jsonl"
+    c = Child("record", "--target", f"127.0.0.1:{dead}", "-o", out, "--listen", "0", "--once")
+    try:
+        port = port_of(c.first_line(), " via ")
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            assert s.recv(10) == b""
+        _, err = c.finish()
+    finally:
+        c.close()
+    assert c.p.returncode == 1
+    assert err.startswith("scpi-replay: warning: connection to target refused")
+
+
+def test_serve_logs_unknown_query_while_running(tmp_path):
+    c = Child("serve", make(tmp_path / "c.jsonl"), "--port", "0")
+    try:
+        port = port_of(c.first_line(), " on ")
+        lines: queue.Queue = queue.Queue()
+        threading.Thread(target=lambda: lines.put(c.p.stderr.readline()), daemon=True).start()
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"FOO?\n")
+            assert lines.get(timeout=10) == "scpi-replay: unknown query: FOO?\n"
+    finally:
+        c.close()

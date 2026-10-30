@@ -60,7 +60,10 @@ each one, so a crash loses nothing. The recorder runs until Ctrl+C, or with
 are fine, each gets its own connection number and its own connection to the
 target. `--listen` defaults to `127.0.0.1:5025`, or to a free port (printed) if
 the target is local. The target port defaults to 5025; connecting to it times
-out after 10 s.
+out after 10 s. If the target refuses or does not answer, the client is
+disconnected, and a warning is written to the cassette and printed on stderr
+(`scpi-replay: warning: ...`). With `--once` the exit code is 1 if no
+connection to the target was ever opened, else 0.
 
 [`examples/drive_dmm.py`](examples/drive_dmm.py) is the PyVISA session that
 produced [`examples/bench-dmm.scpi.jsonl`](examples/bench-dmm.scpi.jsonl).
@@ -150,10 +153,10 @@ the cassette.
   Repeated queries get the recorded answers in recorded order, then the last
   one again. A query that is not in the cassette gets **no answer**, so the
   client times out like on a real instrument that does not know the command;
-  it is logged as `unknown query` on stderr. Commands without a `?` are
+  it is logged on stderr as it happens (`scpi-replay: unknown query: X?`). Commands without a `?` are
   accepted silently.
 - `--mode strict`: the client must send exactly the recorded commands in the
-  recorded order. On the first mismatch the server logs `expected X, got Y` and
+  recorded order. On the first mismatch the server logs `scpi-replay: expected X, got Y` and
   closes the connection, so the test fails fast instead of timing out.
 - `--conn N` serves one recorded connection (default: all of them, one after
   the other). Every new client starts from the beginning.
@@ -278,7 +281,11 @@ report = check(cassette, ("127.0.0.1", 5025), rules="rules.toml", timing="fast")
 assert report.ok, report.text()
 ```
 
-The servers run on a background thread with their own event loop.
+The servers run on a background thread with their own event loop. They are
+silent by default; pass `log=print` (any callable taking a string) to
+`ReplayServer` or `Recorder` to see problems and warnings as they happen.
+`check()` and `ReplayServer` raise `ValueError` for a `conn` that is not in the
+cassette.
 
 ## Limits
 
