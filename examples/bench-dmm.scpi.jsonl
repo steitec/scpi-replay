@@ -1,0 +1,14 @@
+{"format": "scpi-replay/1", "recorded": "2026-10-30T19:28:53+01:00", "target": "127.0.0.1:44777", "tool": "scpi-replay 0.1.0", "note": ""}
+{"t": 1.565, "conn": 1, "event": "open"}
+{"t": 1.565, "conn": 1, "dir": "send", "data": "*IDN?"}
+{"t": 1.565, "conn": 1, "dir": "recv", "data": "scpi-sim,DMM,SIM00001,0.5.0"}
+{"t": 1.566, "conn": 1, "dir": "send", "data": "CONF:VOLT:DC 10"}
+{"t": 1.608, "conn": 1, "dir": "send", "data": "READ?"}
+{"t": 1.609, "conn": 1, "dir": "recv", "data": "+4.99958428E+00"}
+{"t": 1.609, "conn": 1, "dir": "send", "data": "READ?"}
+{"t": 1.609, "conn": 1, "dir": "recv", "data": "+4.99975954E+00"}
+{"t": 1.61, "conn": 1, "dir": "send", "data": "READ?"}
+{"t": 1.61, "conn": 1, "dir": "recv", "data": "+4.99982347E+00"}
+{"t": 1.61, "conn": 1, "dir": "send", "data": "SYST:ERR?"}
+{"t": 1.611, "conn": 1, "dir": "recv", "data": "0,\"No error\""}
+{"t": 1.611, "conn": 1, "event": "close", "by": "client"}

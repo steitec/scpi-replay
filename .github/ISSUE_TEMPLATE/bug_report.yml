@@ -1,0 +1,55 @@
+name: Bug report
+description: Something crashes or behaves differently than documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Security problems go through
+        [private reporting](https://github.com/steitec/scpi-replay/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands and a minimal script. If possible attach the cassette (or the relevant lines of it).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: Traceback or console output, if any.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: scpi-replay version
+      description: Output of `pip show scpi-replay` or the Docker image tag.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: command
+    attributes:
+      label: Command
+      multiple: true
+      options:
+        - record
+        - serve
+        - check
+        - show
+        - pytest plugin / Python API
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, PyVISA / PyVISA-py versions if used.
+      placeholder: "Ubuntu 24.04, Python 3.12, pyvisa 1.14, pyvisa-py 0.7"

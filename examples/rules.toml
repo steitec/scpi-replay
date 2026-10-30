@@ -1,0 +1,10 @@
+# Tolerances for checking bench-dmm.scpi.jsonl against a DMM (real or simulated).
+# The first matching rule wins; everything else is compared field by field.
+
+[[rule]]
+match = "*IDN?"
+compare = "ignore"      # serial number and firmware differ from unit to unit
+
+[[rule]]
+match = "READ?"
+abs = 0.05              # readings are noisy: |actual - recorded| <= 0.05

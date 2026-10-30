@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -v -rs
+      - run: pytest -v examples/test_with_cassette.py
+      - name: Example cassette against scpi-sim (exit 0), against an edited copy (exit 1)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -u
+          wait_port() {  # prints the port from the first "host:port" in a log
+            for _ in $(seq 100); do
+              port=$(grep -o '127\.0\.0\.1:[0-9]*' "$1" | head -1 | cut -d: -f2 || true)
+              if [ -n "$port" ]; then echo "$port"; return; fi
+              sleep 0.1
+            done
+            cat "$1"; return 1
+          }
+          scpi-sim serve dmm --port 0 > sim.log 2>&1 &
+          sim=$!
+          port=$(wait_port sim.log)
+          scpi-replay check examples/bench-dmm.scpi.jsonl --target 127.0.0.1:$port \
+            --rules examples/rules.toml --timing fast --junit junit.xml
+          grep -q '<testsuite' junit.xml
+          kill $sim
+          # One READ? value changed by hand: the check must fail with exit 1.
+          sed 's/+4.99975954E+00/+5.20000000E+00/' examples/bench-dmm.scpi.jsonl > edited.scpi.jsonl
+          scpi-replay serve edited.scpi.jsonl --port 0 > serve.log 2>&1 &
+          srv=$!
+          port=$(wait_port serve.log)
+          set +e
+          scpi-replay check examples/bench-dmm.scpi.jsonl --target 127.0.0.1:$port \
+            --rules examples/rules.toml --timing fast | tee fail.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          kill $srv
+          test $code -eq 1
+          grep -q '^FAIL  004 READ?' fail.txt
