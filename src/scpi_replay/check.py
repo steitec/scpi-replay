@@ -61,7 +61,7 @@ class Report:
         for r in ordered:
             st = r.verdict.status
             tag = f"\x1b[{paint[st]}m{st}\x1b[0m" if color else st
-            line = f"{tag}{' ' * (6 - len(st))}{r.label}"
+            line = f"{tag}{' ' * (2 if len(st) < 6 else 1)}{r.label}"
             if r.verdict.reason:
                 line += f"  {r.verdict.reason}"
             lines.append(line)
@@ -131,6 +131,7 @@ class _Link:
 
     def send(self, data: bytes) -> None:
         try:
+            self.sock.settimeout(None)  # read() leaves a tiny timeout behind
             self.sock.sendall(data)
         except OSError as e:
             raise _Lost from e
@@ -176,28 +177,33 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
     else:
         rule_list = load_rules(rules)
     host, port = target
+    exchanges = cassette.exchanges(conn)
     try:
         sock = socket.create_connection(target, timeout=timeout)
     except OSError as e:
         raise CheckError(f"cannot connect to {host}:{port}: {e}") from None
     report = Report(name, f"{host}:{port}")
-    exchanges = cassette.exchanges(conn)
     with sock:
         link = _Link(sock)
         for pos, ex in enumerate(exchanges):
             if timing == "recorded" and ex.gap > 0:
                 time.sleep(min(ex.gap, max_gap))
             rule = find_rule(rule_list, ex.send.text) if ex.query else None
+            sent = False
             try:
                 link.send(ex.send.raw + (ex.send.term or b"\n"))
+                sent = True
                 if not ex.query:
                     continue
                 actual = link.read(timeout)
             except _Lost:
                 report.aborted = f"connection lost at {ex.index:03d} {ex.send.text}"
-                rest = [e for e in exchanges[pos:] if e.query]
-                for e in rest:
-                    report.results.append(Result(e, None, Verdict("FAIL", "not sent: connection lost")))
+                for e in exchanges[pos:]:
+                    if not e.query:
+                        continue
+                    reason = ("connection lost before response" if e is ex and sent
+                              else "not sent: connection lost")
+                    report.results.append(Result(e, None, Verdict("FAIL", reason)))
                 break
             assert rule is not None
             report.results.append(Result(ex, actual, compare(ex.response, actual, rule)))

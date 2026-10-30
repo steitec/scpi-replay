@@ -108,9 +108,11 @@ def test_no_response_continues(tmp_path):
 def test_connection_lost_aborts(tmp_path):
     p = make(tmp_path / "c", BASE)
     with Silent(close_after=2) as srv:
-        rep = check(p, tgt(srv), timing="fast", timeout=2.0)
+        rep = check(p, tgt(srv), timing="fast", timeout=0.3)
     assert rep.aborted and "002 READ?" in rep.aborted
-    assert [r.verdict.reason for r in rep.results[1:]] == ["not sent: connection lost"] * 2
+    assert rep.results[0].verdict.reason == "no response"
+    assert [r.verdict.reason for r in rep.results[1:]] == ["connection lost before response",
+                                                           "not sent: connection lost"]
     assert len(rep.results) == 3 and not rep.ok
     assert rep.text().splitlines()[-2].startswith("aborted: ")
 
@@ -209,3 +211,12 @@ def test_rules_ignore(tmp_path):
     with ReplayServer(other) as srv:
         rep = run(p, srv, rules=[Rule("READ?", compare="ignore")])
     assert rep.ok and rep.counts["IGNORED"] == 1
+
+
+def test_text_ignored_separator(tmp_path):
+    rep = three(tmp_path)
+    rep.results[0].verdict = Verdict("IGNORED")
+    lines = rep.text().splitlines()
+    assert "IGNORED 001 *IDN?" in lines
+    assert "FAIL  002 READ?  expected +1.2E+01, got +1.3E+01" in lines
+    assert "PASS  004 VOLT?" in lines
