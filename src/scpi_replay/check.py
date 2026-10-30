@@ -124,14 +124,15 @@ class _Link:
     answer to the next query.
     """
 
-    def __init__(self, sock: socket.socket) -> None:
+    def __init__(self, sock: socket.socket, timeout: float) -> None:
         self.sock = sock
+        self.timeout = timeout
         self.framer = Framer()
         self.pending: deque[Frame] = deque()
 
     def send(self, data: bytes) -> None:
         try:
-            self.sock.settimeout(None)  # read() leaves a tiny timeout behind
+            self.sock.settimeout(self.timeout)  # read() leaves a tiny timeout behind
             self.sock.sendall(data)
         except OSError as e:
             raise _Lost from e
@@ -184,7 +185,7 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
         raise CheckError(f"cannot connect to {host}:{port}: {e}") from None
     report = Report(name, f"{host}:{port}")
     with sock:
-        link = _Link(sock)
+        link = _Link(sock, timeout)
         for pos, ex in enumerate(exchanges):
             if timing == "recorded" and ex.gap > 0:
                 time.sleep(min(ex.gap, max_gap))
