@@ -26,8 +26,12 @@ class ReplayServer(TcpServer):
                  mode: Literal["lookup", "strict"] = "lookup", conn: int | None = None,
                  timing: Literal["fast", "recorded"] = "fast", max_delay: float = 5.0):
         super().__init__(host, port, name="replay-server")
-        if not isinstance(cassette, Cassette):
+        if isinstance(cassette, Cassette):
+            name = "<memory>"
+        else:
+            name = str(cassette)
             cassette = Cassette.load(cassette)
+        cassette.require_conn(conn, name)
         self.mode = mode
         self.timing = timing
         self.max_delay = max_delay

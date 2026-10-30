@@ -190,12 +190,17 @@ def check(cassette: Cassette | str | Path, target: tuple[str, int], *,
           rules: list[Rule] | str | Path | None = None,
           timing: Literal["recorded", "fast"] = "recorded", max_gap: float = 10.0,
           timeout: float = 5.0, conn: int | None = None) -> Report:
-    """Send every recorded command to ``target`` and compare the query responses."""
+    """Send every recorded command to ``target`` and compare the query responses.
+
+    Raises :class:`CheckError` if the target cannot be reached and ValueError
+    for an unknown ``conn``.
+    """
     if isinstance(cassette, Cassette):
         name = "<memory>"
     else:
         name = str(cassette)
         cassette = Cassette.load(cassette)
+    cassette.require_conn(conn, name)
     if rules is None:
         rule_list: list[Rule] = []
     elif isinstance(rules, list):

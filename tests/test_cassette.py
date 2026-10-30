@@ -181,3 +181,14 @@ def test_write_after_close_is_noop(tmp_path):
     w.event(1, "open")
     w.close()
     assert Cassette.load(p).items == []
+
+
+def test_require_conn(tmp_path):
+    from scpi_replay.cassette import Cassette as C, Event as E
+    c = C({}, [E(0.0, 1, "open"), E(0.1, 2, "open"), E(0.2, 7, "warning", text="w")])
+    c.require_conn(None, "F")
+    c.require_conn(2, "F")
+    with pytest.raises(ValueError, match=r"^no connection 7 in F \(has: 1, 2\)$"):
+        c.require_conn(7, "F")
+    with pytest.raises(ValueError, match=r"\(has: none\)"):
+        C({}, []).require_conn(1, "F")

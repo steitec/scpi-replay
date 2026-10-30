@@ -281,3 +281,9 @@ def test_recorded_latency_longer_than_timeout_is_waited_for(tmp_path):
         rep = check(p, tgt(srv), timing="fast", timeout=0.1)
     assert rep.ok, rep.text()
     assert [r.actual for r in rep.results] == [b"1", b"+1.0E+00"]
+
+
+def test_unknown_conn_raises_before_connecting(tmp_path):
+    p = make(tmp_path / "c", BASE)
+    with pytest.raises(ValueError, match=rf"no connection 99 in {p} \(has: 1\)"):
+        check(p, ("127.0.0.1", 1), conn=99)

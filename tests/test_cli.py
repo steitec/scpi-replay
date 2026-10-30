@@ -292,3 +292,12 @@ def test_check_option_wiring(monkeypatch):
                  "--timeout", "3", "--rules", "r.toml"]) == 0
     assert seen == {"file": "F", "target": ("h", 7), "rules": "r.toml", "timing": "fast",
                     "max_gap": 2.0, "timeout": 3.0, "conn": 3}
+
+
+@pytest.mark.parametrize("cmd", [["check", "--target", "127.0.0.1:1", "--timing", "fast"],
+                                 ["serve", "--port", "0"], ["show"]])
+def test_unknown_conn_is_usage_error(tmp_path, capsys, monkeypatch, cmd):
+    monkeypatch.setattr(cli, "_wait_forever", lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+    cas = make(tmp_path / "c.jsonl")
+    assert main([cmd[0], str(cas), *cmd[1:], "--conn", "99"]) == 2
+    assert capsys.readouterr().err == f"scpi-replay: error: no connection 99 in {cas} (has: 1)\n"

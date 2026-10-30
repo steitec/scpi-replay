@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from .cassette import CassetteError
 from .cli import split_address
 from .proxy import Recorder
 from .server import ReplayServer
@@ -67,7 +66,7 @@ class CassettePool:
                 server = ReplayServer(path, mode=mode, conn=conn)
                 check = require_all
             server.start()
-        except (CassetteError, OSError) as e:
+        except (ValueError, OSError) as e:  # ValueError: bad cassette or unknown conn
             pytest.fail(f"scpi-replay: {e}", pytrace=False)
         self.servers.append((server, check))
         return server

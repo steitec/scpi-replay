@@ -206,6 +206,12 @@ class Cassette:
     def connections(self) -> list[int]:
         return sorted({i.conn for i in self.items if not (isinstance(i, Event) and i.kind == "warning")})
 
+    def require_conn(self, conn: int | None, name: str) -> None:
+        """Raise ValueError if ``conn`` is given but not in the cassette (``name`` names it)."""
+        if conn is not None and conn not in self.connections():
+            has = ", ".join(map(str, self.connections())) or "none"
+            raise ValueError(f"no connection {conn} in {name} (has: {has})")
+
     def _walk(self, conn: int) -> tuple[list[Exchange], list[Message]]:
         exchanges: list[Exchange] = []
         unsolicited: list[Message] = []

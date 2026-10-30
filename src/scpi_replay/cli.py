@@ -9,9 +9,8 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .cassette import Cassette, CassetteError
+from .cassette import Cassette
 from .check import CheckError, check
-from .compare import RulesError
 from .proxy import Recorder
 from .server import ReplayServer
 from .show import transcript
@@ -187,7 +186,7 @@ def _serve(args) -> int:
         srv = ReplayServer(args.file, host=args.host, port=args.port, mode=args.mode,
                            conn=args.conn, timing=args.timing, max_delay=args.max_delay)
         bound = srv.start()
-    except (CassetteError, OSError) as e:
+    except (ValueError, OSError) as e:  # ValueError includes CassetteError
         print(f"scpi-replay: error: {e}", file=sys.stderr)
         return 2
     _install_sigterm()
@@ -221,7 +220,7 @@ def _check(args) -> int:
             Path(args.junit).write_text(report.to_junit(), encoding="utf-8")
         if args.json:
             Path(args.json).write_text(report.to_json(), encoding="utf-8")
-    except (CheckError, CassetteError, RulesError, OSError) as e:
+    except (CheckError, ValueError, OSError) as e:  # ValueError: bad cassette, rules or --conn
         print(f"scpi-replay: error: {e}", file=sys.stderr)
         return 2
     return 0 if report.ok else 1
@@ -230,7 +229,8 @@ def _check(args) -> int:
 def _show(args) -> int:
     try:
         cassette = Cassette.load(args.file)
-    except CassetteError as e:
+        cassette.require_conn(args.conn, args.file)
+    except ValueError as e:  # includes CassetteError
         print(f"scpi-replay: error: {e}", file=sys.stderr)
         return 2
     color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
