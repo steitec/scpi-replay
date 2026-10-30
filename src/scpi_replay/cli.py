@@ -61,6 +61,19 @@ def _listen(text: str) -> tuple[str, int]:
     return _address()(text)
 
 
+def _int_range(lo: int, hi: int | None = None):
+    def conv(text: str) -> int:
+        try:
+            value = int(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"invalid integer: {text!r}") from None
+        if value < lo or (hi is not None and value > hi):
+            raise argparse.ArgumentTypeError(
+                f"must be between {lo} and {hi}" if hi is not None else f"must be at least {lo}")
+        return value
+    return conv
+
+
 def _positive(text: str) -> float:
     try:
         value = float(text)
@@ -88,9 +101,9 @@ def _build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("serve", help="act as the recorded instrument")
     s.add_argument("file", metavar="FILE")
     s.add_argument("--host", default="127.0.0.1")
-    s.add_argument("--port", type=int, default=DEFAULT_PORT)
+    s.add_argument("--port", type=_int_range(0, 65535), default=DEFAULT_PORT)
     s.add_argument("--mode", choices=["strict", "lookup"], default="lookup")
-    s.add_argument("--conn", type=int)
+    s.add_argument("--conn", type=_int_range(1))
     s.add_argument("--timing", choices=["fast", "recorded"], default="fast")
     s.add_argument("--max-delay", type=_positive, default=5.0, metavar="SECONDS")
 
@@ -103,11 +116,11 @@ def _build_parser() -> argparse.ArgumentParser:
     c.add_argument("--timing", choices=["recorded", "fast"], default="recorded")
     c.add_argument("--max-gap", type=_positive, default=10.0, metavar="SECONDS")
     c.add_argument("--timeout", type=_positive, default=5.0, metavar="SECONDS")
-    c.add_argument("--conn", type=int)
+    c.add_argument("--conn", type=_int_range(1))
 
     w = sub.add_parser("show", help="print a transcript")
     w.add_argument("file", metavar="FILE")
-    w.add_argument("--conn", type=int)
+    w.add_argument("--conn", type=_int_range(1))
     w.add_argument("--times", action="store_true")
     return p
 
@@ -145,7 +158,11 @@ def _record(args) -> int:
     try:
         bound = rec.start()
     except OSError as e:
-        print(f"scpi-replay: error: cannot listen on {listen[0]}:{listen[1]}: {e}", file=sys.stderr)
+        if e.filename is not None:
+            what = f"cannot write {args.output}: {e.strerror or e}"
+        else:
+            what = f"cannot listen on {listen[0]}:{listen[1]}: {e}"
+        print(f"scpi-replay: error: {what}", file=sys.stderr)
         return 2
     _install_sigterm()
     try:

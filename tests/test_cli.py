@@ -1,16 +1,19 @@
 import json
-import os
+import queue
 import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
 import xml.etree.ElementTree as ET
 
 import pytest
 
 from scpi_replay.cassette import Cassette
+from scpi_replay import cli
 from scpi_replay.cli import main, parse_address
 from scpi_replay.server import ReplayServer
-from scpi_replay.proxy import Recorder
 
 from helpers import EchoInstrument
 from test_show import make as make_show
@@ -81,76 +84,211 @@ def test_check_errors(tmp_path, capsys):
                      "--rules", str(rules), "--timing", "fast"]) == 2
 
 
-def start(args, **kw):
-    return subprocess.Popen([sys.executable, "-m", "scpi_replay", *args], stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, **kw)
+POSIX_ONLY = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stop summary needs a graceful signal; Windows send_signal is TerminateProcess")
+
+
+class Child:
+    """A scpi-replay subprocess; the first stdout line is read with a deadline."""
+
+    def __init__(self, *args):
+        self.p = subprocess.Popen([sys.executable, "-m", "scpi_replay", *map(str, args)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self._q: queue.Queue = queue.Queue()
+        threading.Thread(target=lambda: self._q.put(self.p.stdout.readline()), daemon=True).start()
+
+    def first_line(self, timeout=10.0) -> str:
+        try:
+            line = self._q.get(timeout=timeout).strip()
+        except queue.Empty:
+            line = ""
+        if not line:
+            self.p.kill()
+            _, err = self.p.communicate()
+            pytest.fail(f"no status line from child (rc={self.p.returncode}); stderr:\n{err}")
+        return line
+
+    def finish(self, sig=None, timeout=10.0):
+        if sig is not None:
+            self.p.send_signal(sig)
+        return self.p.communicate(timeout=timeout)
+
+    def close(self):
+        if self.p.poll() is None:
+            self.p.kill()
+        self.p.wait()
+        self.p.stdout.close()
+        self.p.stderr.close()
+
+
+def port_of(line, marker):
+    return int(line.split(marker)[1].split()[0].split(":")[-1])
 
 
 def query(port, data=b"X?\n"):
-    import socket
     with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
         s.sendall(data)
         if data.endswith(b"?\n"):
             return s.recv(100)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT")
+@POSIX_ONLY
 @pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
 def test_serve_subprocess(tmp_path, sig):
     cas = make(tmp_path / "c.jsonl")
-    p = start(["serve", str(cas), "--port", "0"])
+    c = Child("serve", cas, "--port", "0")
     try:
-        line = p.stdout.readline().strip()
+        line = c.first_line()
         assert line.startswith(f"serving {cas} on 127.0.0.1:") and line.endswith("(lookup)")
-        port = int(line.split("127.0.0.1:")[1].split()[0])
-        assert query(port) == b"ans:X?\n"
-        p.send_signal(sig)
-        out, err = p.communicate(timeout=10)
+        assert query(port_of(line, " on ")) == b"ans:X?\n"
+        _, err = c.finish(sig)
     finally:
-        p.kill()
-        p.wait()
-        p.stdout.close()
-        p.stderr.close()
-    assert p.returncode == 0
+        c.close()
+    assert c.p.returncode == 0
     assert "served 1 queries, 0 unknown, 0 mismatches" in err
 
 
+@POSIX_ONLY
+def test_serve_unknown_query_exits_1(tmp_path):
+    c = Child("serve", make(tmp_path / "c.jsonl"), "--port", "0")
+    try:
+        port = port_of(c.first_line(), " on ")
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"NOPE?\nX?\n")
+            assert s.recv(100) == b"ans:X?\n"
+        _, err = c.finish(signal.SIGINT)
+    finally:
+        c.close()
+    assert c.p.returncode == 1
+    assert "served 1 queries, 1 unknown, 0 mismatches" in err
+    assert "unknown query: NOPE?" in err
+
+
+@POSIX_ONLY
+def test_serve_strict_summary(tmp_path):
+    c = Child("serve", make(tmp_path / "c.jsonl"), "--port", "0", "--mode", "strict")
+    try:
+        line = c.first_line()
+        assert line.endswith("(strict)")
+        query(port_of(line, " on "), b"WRONG\n")
+        time.sleep(0.3)  # let the server register the mismatch before the stop
+        _, err = c.finish(signal.SIGINT)
+    finally:
+        c.close()
+    assert c.p.returncode == 1
+    assert "0 queries, 0 unknown, 1 mismatches, 1 recorded exchanges never reached" in err
+    assert "expected X?, got " in err
+
+
+@POSIX_ONLY
 def test_record_listen_default_and_note(tmp_path):
+    out = tmp_path / "r.jsonl"
     with EchoInstrument() as inst:
-        out = tmp_path / "r.jsonl"
-        p = start(["record", "--target", f"127.0.0.1:{inst.port}", "-o", str(out), "--note", "hi"])
+        c = Child("record", "--target", f"127.0.0.1:{inst.port}", "-o", out, "--note", "hi")
         try:
-            line = p.stdout.readline().strip()
+            line = c.first_line()
             assert line.startswith(f"recording 127.0.0.1:{inst.port} via 127.0.0.1:")
             assert line.endswith(f"-> {out}")
-            port = int(line.split(" via ")[1].split(" ")[0].split(":")[1])
-            assert port != 5025
-            p.send_signal(signal.SIGINT if sys.platform != "win32" else signal.SIGTERM)
-            o, e = p.communicate(timeout=10)
+            assert port_of(line, " via ") != 5025
+            o, _ = c.finish(signal.SIGINT)
         finally:
-            p.kill()
-            p.wait()
-            p.stdout.close()
-            p.stderr.close()
+            c.close()
     assert "recorded 0 connection(s)" in o
     assert Cassette.load(out).header["note"] == "hi"
 
 
 def test_record_once(tmp_path):
+    out = tmp_path / "r.jsonl"
     with EchoInstrument() as inst:
-        out = tmp_path / "r.jsonl"
-        p = start(["record", "--target", f"127.0.0.1:{inst.port}", "-o", str(out), "--listen", "0",
-                   "--once"])
+        c = Child("record", "--target", f"127.0.0.1:{inst.port}", "-o", out, "--listen", "0",
+                  "--once", "--note", "n")
         try:
-            line = p.stdout.readline().strip()
-            port = int(line.split(" via ")[1].split(" ")[0].split(":")[1])
-            assert query(port) == b"ans:X?\n"
-            p.communicate(timeout=10)
+            assert query(port_of(c.first_line(), " via ")) == b"ans:X?\n"
+            c.finish()
         finally:
-            p.kill()
-            p.wait()
-            p.stdout.close()
-            p.stderr.close()
-        assert p.returncode == 0
-    ex = Cassette.load(out).exchanges()
-    assert [e.send.text for e in ex] == ["X?"]
+            c.close()
+        assert c.p.returncode == 0
+    cas = Cassette.load(out)
+    assert [e.send.text for e in cas.exchanges()] == ["X?"]
+    assert cas.header["note"] == "n"
+
+
+def test_record_busy_port_keeps_file(tmp_path, capsys):
+    out = tmp_path / "r.jsonl"
+    out.write_text("precious")
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        rc = main(["record", "--target", "127.0.0.1:1", "-o", str(out),
+                   "--listen", str(busy.getsockname()[1])])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert err.startswith("scpi-replay: error: cannot listen on") and err.count("\n") == 1
+    assert out.read_text() == "precious"
+
+
+def test_record_unwritable_output(tmp_path, capsys):
+    rc = main(["record", "--target", "127.0.0.1:1", "-o", str(tmp_path / "no" / "x.jsonl"),
+               "--listen", "0"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "cannot write" in err and "cannot listen" not in err
+
+
+@pytest.mark.parametrize("argv", [
+    ["serve", "F", "--port", "70000"], ["serve", "F", "--port", "-1"],
+    ["serve", "F", "--conn", "0"], ["check", "F", "--target", "h", "--conn", "0"],
+    ["record", "--target", "h", "-o", "x", "--listen", "70000"]])
+def test_range_errors(argv):
+    with pytest.raises(SystemExit) as e:
+        main(argv)
+    assert e.value.code == 2
+
+
+class FakeServer:
+    seen: dict = {}
+
+    def __init__(self, cassette, **kw):
+        FakeServer.seen = {"cassette": cassette, **kw}
+        self.problems, self.served = [], 0
+
+    def start(self):
+        return 1234
+
+    def stop(self):
+        pass
+
+    def unreached(self):
+        return []
+
+
+def test_serve_option_wiring(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "ReplayServer", FakeServer)
+    monkeypatch.setattr(cli, "_wait_forever", lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+    rc = main(["serve", "F", "--host", "0.0.0.0", "--port", "9", "--mode", "strict", "--conn", "2",
+               "--timing", "recorded", "--max-delay", "1.5"])
+    assert rc == 0
+    assert FakeServer.seen == {"cassette": "F", "host": "0.0.0.0", "port": 9, "mode": "strict",
+                               "conn": 2, "timing": "recorded", "max_delay": 1.5}
+    assert "serving F on 0.0.0.0:1234 (strict)" in capsys.readouterr().out
+
+
+def test_check_option_wiring(monkeypatch):
+    seen = {}
+
+    class R:
+        ok = True
+
+        def text(self, color=False):
+            return "ok"
+
+    def fake(file, target, **kw):
+        seen.update(file=file, target=target, **kw)
+        return R()
+
+    monkeypatch.setattr(cli, "check", fake)
+    assert main(["check", "F", "--target", "h:7", "--conn", "3", "--timing", "fast", "--max-gap", "2",
+                 "--timeout", "3", "--rules", "r.toml"]) == 0
+    assert seen == {"file": "F", "target": ("h", 7), "rules": "r.toml", "timing": "fast",
+                    "max_gap": 2.0, "timeout": 3.0, "conn": 3}
