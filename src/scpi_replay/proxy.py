@@ -3,12 +3,55 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from pathlib import Path
 
 from ._server import TcpServer
 from .cassette import CassetteWriter
 from .framing import Framer
+
+CONNECT_TIMEOUT = 10.0  # seconds to reach the target
+
+
+class _Conn:
+    """Recording state of one proxied connection; logging failures never propagate."""
+
+    def __init__(self, cassette: CassetteWriter, number: int) -> None:
+        self.cassette = cassette
+        self.number = number
+        self.framers = {"send": Framer(), "recv": Framer()}
+        self.broken = False
+        self.closed_by: str | None = None
+
+    def guard(self, call, *args, **kwargs) -> None:
+        """Run a cassette/framer call; after the first failure stop recording this connection."""
+        if self.broken:
+            return
+        try:
+            call(*args, **kwargs)
+        except Exception as exc:
+            self.broken = True
+            print(f"scpi-replay: recording of connection {self.number} stopped: {exc!r}",
+                  file=sys.stderr)
+
+    def message(self, direction: str, chunk: bytes) -> None:
+        self.guard(lambda: [self.cassette.message(self.number, direction, f)
+                            for f in self.framers[direction].feed(chunk)])
+
+    def event(self, kind: str, **kw) -> None:
+        self.guard(self.cassette.event, self.number, kind, **kw)
+
+    def finish(self) -> None:
+        """Flush leftovers of both directions, then write the close event."""
+        def flush() -> None:
+            for direction, framer in self.framers.items():
+                rest = framer.flush()
+                if rest is not None:
+                    self.cassette.message(self.number, direction, rest)
+                    self.cassette.event(self.number, "warning", text="incomplete message at close")
+        self.guard(flush)
+        self.event("close", by=self.closed_by or "recorder")
 
 
 class Recorder(TcpServer):
@@ -21,64 +64,66 @@ class Recorder(TcpServer):
         self.once = once
         self.connections = 0
         self.finished = threading.Event()
-        self._cassette = CassetteWriter(path, target=f"{target[0]}:{target[1]}", note=note)
+        self._path = path
+        self._note = note
+        self._cassette: CassetteWriter | None = None
+
+    async def _open(self) -> None:
+        await super()._open()
+        try:  # only after a successful bind, so a failed start leaves the file alone
+            self._cassette = CassetteWriter(
+                self._path, target=f"{self.target[0]}:{self.target[1]}", note=self._note)
+        except BaseException:
+            await self._close()
+            raise
 
     def stop(self) -> None:
         try:
             super().stop()
         finally:
-            self._cassette.close()
+            if self._cassette is not None:
+                self._cassette.close()
 
     async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections += 1
-        conn = self.connections
-        cassette = self._cassette
+        conn = _Conn(self._cassette, self.connections)
+        t_writer = None
         try:
             try:
-                t_reader, t_writer = await asyncio.open_connection(*self.target)
+                t_reader, t_writer = await asyncio.wait_for(
+                    asyncio.open_connection(*self.target), CONNECT_TIMEOUT)
+            except asyncio.TimeoutError:
+                conn.event("warning", text=f"connection to target timed out after {CONNECT_TIMEOUT:g}s")
+                return
             except OSError as exc:
                 kind = "refused" if isinstance(exc, ConnectionRefusedError) else "failed"
-                cassette.event(conn, "warning", text=f"connection to target {kind}: {exc}")
+                conn.event("warning", text=f"connection to target {kind}: {exc}")
                 return
-            cassette.event(conn, "open")
-            closer: list[str] = []
+            conn.event("open")
 
             async def pump(src, dst, direction: str, side: str) -> None:
-                framer = Framer()
-
-                def log(call, *args) -> None:
-                    try:
-                        call(*args)
-                    except Exception as exc:  # never break forwarding
-                        cassette.event(conn, "warning", text=f"recording error: {exc!r}")
-
                 try:
                     while chunk := await src.read(65536):
                         dst.write(chunk)  # forward first
                         await dst.drain()
-                        log(lambda: [cassette.message(conn, direction, f) for f in framer.feed(chunk)])
+                        conn.message(direction, chunk)
                 except OSError:
                     pass
-                if not closer:
-                    closer.append(side)
-                    cassette.event(conn, "close", by=side)
-                    # EOF on one side ends the connection: unblock the other pump
-                    for w in (writer, t_writer):
-                        w.close()
-                rest = framer.flush()
-                if rest is not None:
-                    log(cassette.message, conn, direction, rest)
-                    cassette.event(conn, "warning", text="incomplete message at close")
+                if conn.closed_by is None:
+                    conn.closed_by = side
+                # EOF on one side ends the connection: unblock the other pump
+                writer.close()
+                t_writer.close()
 
-            try:
-                await asyncio.gather(pump(reader, t_writer, "send", "client"),
-                                     pump(t_reader, writer, "recv", "target"))
-            finally:
+            await asyncio.gather(pump(reader, t_writer, "send", "client"),
+                                 pump(t_reader, writer, "recv", "target"))
+        finally:
+            if t_writer is not None:  # also reached on cancellation (stop)
+                conn.finish()
                 t_writer.close()
                 try:
                     await t_writer.wait_closed()
-                except OSError:
+                except (OSError, asyncio.CancelledError):
                     pass
-        finally:
-            if self.once and not self.finished.is_set():
+            if self.once:
                 self.finished.set()

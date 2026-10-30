@@ -126,3 +126,75 @@ def test_once_sets_finished(tmp_path):
             s.sendall(b"A?\n")
             read_until(s)
         assert rec.finished.wait(T)
+        assert len(events(Cassette.load(path), "close")) == 1
+
+
+def test_finished_stays_unset_without_once(setup):
+    inst, rec, path = setup
+    with connect(rec.port) as s:
+        s.sendall(b"A?\n")
+        read_until(s)
+    settle(path)
+    assert not rec.finished.is_set()
+
+
+def test_leftover_at_close_is_recorded(setup):
+    inst, rec, path = setup
+    with connect(rec.port) as s:
+        s.sendall(b"HALF\n")
+        assert read_until(s, n=1) == b"X"
+        assert s.recv(10) == b""
+    settle(path)
+    rec.stop()
+    cas = Cassette.load(path)
+    recv = [m for m in cas.items if getattr(m, "dir", None) == "recv"]
+    assert [m.raw for m in recv] == [b"X"]
+    assert any("incomplete message" in w.text for w in events(cas, "warning"))
+
+
+def test_cassette_errors_do_not_break_forwarding(setup, monkeypatch):
+    inst, rec, path = setup
+
+    def boom(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(rec._cassette, "message", boom)
+    monkeypatch.setattr(rec._cassette, "event", boom)
+    with connect(rec.port) as s:
+        s.sendall(b"A?\n")
+        assert read_until(s) == b"ans:A?\n"
+        s.sendall(b"B?\n")
+        assert read_until(s) == b"ans:B?\n"
+    rec.stop()
+    assert bytes(inst.received) == b"A?\nB?\n"
+
+
+def test_stop_records_unfinished_data(setup):
+    inst, rec, path = setup
+    with connect(rec.port) as s:
+        s.sendall(b"A?\n")
+        assert read_until(s) == b"ans:A?\n"
+        s.sendall(b"PART")
+        deadline = time.monotonic() + T
+        while bytes(inst.received) != b"A?\n" and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.2)  # let the proxy forward PART
+        rec.stop()
+    cas = Cassette.load(path)
+    sends = [m.raw for m in cas.items if getattr(m, "dir", None) == "send"]
+    assert sends == [b"A?", b"PART"]
+    assert any("incomplete message" in w.text for w in events(cas, "warning"))
+    assert [e.by for e in events(cas, "close")] == ["recorder"]
+
+
+def test_failed_start_leaves_file_alone(tmp_path):
+    path = tmp_path / "c.jsonl"
+    path.write_text("PRECIOUS")
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        rec = Recorder(("127.0.0.1", 1), path, port=busy.getsockname()[1])
+        with pytest.raises(OSError):
+            rec.start()
+    assert path.read_text() == "PRECIOUS"
+    rec.stop()

@@ -20,6 +20,10 @@ class EchoInstrument(TcpServer):
             cmd = line.strip()
             if cmd == b"BYE":
                 return
+            if cmd == b"HALF":  # unterminated reply, then hang up
+                writer.write(b"X")
+                await writer.drain()
+                return
             if cmd == b"BIN?":
                 writer.write(b"#14ab\ncd\n")
             elif cmd.endswith(b"?"):
