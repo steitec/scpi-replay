@@ -61,3 +61,43 @@ jobs:
           kill $srv
           test $code -eq 1
           grep -q '^FAIL  004 READ?' fail.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install .
+      - name: Build and start the image
+        run: |
+          docker build -t scpi-replay .
+          docker run -d --name sim -p 5025:5025 scpi-replay
+      - name: Reports healthy once it answers
+        run: |
+          for _ in $(seq 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' sim)" = healthy ] && break; sleep 1
+          done
+          test "$(docker inspect -f '{{.State.Health.Status}}' sim)" = healthy
+      - name: The bundled cassette answers from outside the container
+        run: |
+          scpi-replay check examples/bench-dmm.scpi.jsonl --target 127.0.0.1:5025 \
+            --rules examples/rules.toml --timing fast
+      - name: Runs unprivileged and stops on SIGTERM
+        run: |
+          test "$(docker exec sim id -u)" = 10001
+          docker stop -t 5 sim
+          test "$(docker inspect -f '{{.State.ExitCode}}' sim)" = 0
+      - if: failure()
+        run: docker logs sim
+      - name: Serves a mounted cassette, read-only
+        run: |
+          docker run -d --name own -p 5026:5025 \
+            -v "$PWD/examples/bench-dmm.scpi.jsonl:/cassettes/cassette.scpi.jsonl:ro" scpi-replay
+          for _ in $(seq 60); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' own)" = healthy ] && break; sleep 1
+          done
+          scpi-replay check examples/bench-dmm.scpi.jsonl --target 127.0.0.1:5026 \
+            --rules examples/rules.toml --timing fast
+          docker stop -t 5 own

@@ -33,7 +33,7 @@ def test_roundtrip(tmp_path):
     assert c.header["format"] == "scpi-replay/1"
     assert c.header["target"] == "10.0.0.1:5025"
     assert c.header["note"] == "hi"
-    assert c.header["tool"] == "scpi-replay 0.1.0"
+    assert c.header["tool"] == "scpi-replay 0.1.1"
     msgs = [i for i in c.items if hasattr(i, "raw")]
     assert [(m.raw, m.binary, m.term) for m in msgs] == [
         (b"*IDN?", False, b"\n"),

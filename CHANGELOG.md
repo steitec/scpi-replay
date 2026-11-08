@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 0.1.1 - 2026-11-08
+
+- Docker image `ghcr.io/steitec/scpi-replay`, built with every release: serves a mounted
+  cassette (or the example DMM) on port 5025, unprivileged user, health check
+
 ## 0.1.0 - 2026-10-30
 
 First release.
