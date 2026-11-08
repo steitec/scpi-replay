@@ -174,6 +174,31 @@ the cassette.
   code is 1 if there were unknown queries or mismatches, else 0. On Windows,
   Ctrl+C prints the summary, but `taskkill` ends the process without it.
 
+## Docker
+
+The image serves a cassette as the instrument on port 5025, for test software
+that is not written in Python or runs on another machine. Without a cassette of
+your own it serves the example DMM from `examples/`:
+
+```bash
+docker run --rm -p 5025:5025 ghcr.io/steitec/scpi-replay
+docker run --rm -p 5025:5025 -v ./dmm.scpi.jsonl:/cassettes/cassette.scpi.jsonl:ro ghcr.io/steitec/scpi-replay
+```
+
+Options go after the full `serve` command; `--host 0.0.0.0` is needed there
+because the default is loopback:
+
+```bash
+docker run --rm -p 5025:5025 -v ./dmm.scpi.jsonl:/cassettes/dmm.scpi.jsonl:ro \
+    ghcr.io/steitec/scpi-replay serve /cassettes/dmm.scpi.jsonl --host 0.0.0.0 --mode strict
+```
+
+In GitHub Actions, start it with `docker run -d` in a step after
+`actions/checkout`: service containers start before the checkout, so they
+cannot mount a cassette from your repository. The image reports healthy once
+the port accepts connections. It is built with every release and tagged with
+the version and `latest`; pin the version in CI.
+
 ## Cassette format
 
 A cassette is a JSON Lines file (`*.scpi.jsonl`, UTF-8), one object per line,

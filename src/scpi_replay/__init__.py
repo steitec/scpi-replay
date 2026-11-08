@@ -1,6 +1,6 @@
 """Record SCPI raw-socket traffic into cassettes and replay them."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .cassette import Cassette, CassetteError, CassetteWriter
 from .check import CheckError, CheckInterrupted, Report, check
