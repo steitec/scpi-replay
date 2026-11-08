@@ -81,10 +81,10 @@ class ReplayServer(TcpServer):
             return
         if self.timing == "recorded" and ex.latency:
             await asyncio.sleep(min(ex.latency, self.max_delay))
+        with self._lock:  # before the write: a client that has the answer sees it counted
+            self._served += 1
         writer.write(resp.raw + (resp.term or b"\n"))
         await writer.drain()
-        with self._lock:
-            self._served += 1
 
     async def _serve_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         framer = Framer()

@@ -8,6 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 - Docker image `ghcr.io/steitec/scpi-replay`, built with every release: serves a mounted
   cassette (or the example DMM) on port 5025, unprivileged user, health check
+- `ReplayServer.served` counts an answer before sending it, so a client that has the
+  answer always sees it counted
 
 ## 0.1.0 - 2026-10-30
 
