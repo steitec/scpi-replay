@@ -18,7 +18,7 @@ transparent TCP proxy on the instrument's raw SCPI socket, then replays it as a
 stand-in instrument, as a regression check against a real instrument or a
 simulator, or as a readable transcript.
 
-<!-- docs/demo.gif goes here once recorded with vhs (docs/demo.tape) -->
+![Recording a session, reading the transcript, and checking it against a matching and a deviating instrument](https://raw.githubusercontent.com/steitec/scpi-replay/main/docs/demo.gif)
 
 ```console
 $ scpi-replay record --target 192.168.1.50 -o dmm.scpi.jsonl     # run the test software through the proxy
