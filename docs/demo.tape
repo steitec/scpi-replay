@@ -5,7 +5,7 @@ Output docs/demo.gif
 
 Set Shell "bash"
 Set FontSize 16
-Set Width 1100
+Set Width 1240
 Set Height 640
 Set Padding 16
 Set TypingSpeed 40ms
@@ -40,4 +40,4 @@ Type "scpi-replay check /tmp/demo.scpi.jsonl --target 127.0.0.1:5026 --rules exa
 Sleep 4s
 
 Hide
-Type "pkill -f \"scpi-sim serve\"; rm -f /tmp/demo.scpi.jsonl" Enter
+Type `kill $(jobs -p); rm -f /tmp/demo.scpi.jsonl` Enter
